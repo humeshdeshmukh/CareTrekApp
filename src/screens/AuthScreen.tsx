@@ -4,13 +4,19 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { useTheme } from '../contexts/theme/ThemeContext';
+import { useNavigation } from '@react-navigation/native';
 
 type AuthScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Auth'>;
 
 const AuthScreen = () => {
+  const navigation = useNavigation<StackNavigationProp<RootStackParamList, 'Auth'>>();
   const [phoneNumber, setPhoneNumber] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const { isDark } = useTheme();
+
+  const handleBack = () => {
+    navigation.navigate('RoleSelection');
+  };
 
   const handleSendOTP = async () => {
     if (!phoneNumber.trim()) return;
@@ -36,6 +42,15 @@ const AuthScreen = () => {
         { backgroundColor: isDark ? '#171923' : '#FFFBEF' }
       ]}
     >
+      <TouchableOpacity 
+        style={[styles.backButton, { borderColor: isDark ? '#4A5568' : '#E2E8F0' }]}
+        onPress={handleBack}
+        activeOpacity={0.7}
+      >
+        <Text style={[styles.backButtonText, { color: isDark ? '#E2E8F0' : '#4A5568' }]}>
+          ← Back
+        </Text>
+      </TouchableOpacity>
       <KeyboardAvoidingView 
         style={styles.keyboardAvoidingView}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -125,6 +140,18 @@ const AuthScreen = () => {
 export default AuthScreen;
 
 const styles = StyleSheet.create({
+  backButton: {
+    alignSelf: 'flex-start',
+    padding: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 20,
+    marginLeft: 20,
+  },
+  backButtonText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
   container: {
     flex: 1,
   },

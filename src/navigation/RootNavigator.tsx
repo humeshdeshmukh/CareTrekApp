@@ -8,11 +8,13 @@ import OnboardingScreen from '../screens/OnboardingScreen';
 import AuthScreen from '../screens/AuthScreen';
 import LanguageScreen from '../screens/LanguageScreen';
 import WelcomeScreen from '../screens/WelcomeScreen';
+import RoleSelectionScreen from '../screens/RoleSelectionScreen';
 
 export type RootStackParamList = {
   Welcome: undefined;
   Language: undefined;
   Onboarding: undefined;
+  RoleSelection: undefined;
   Auth: undefined;
   Home: undefined;
   // Add other screen types here
@@ -41,6 +43,7 @@ export const RootNavigator = () => {
       <Stack.Screen name="Welcome" component={WelcomeScreen} />
       <Stack.Screen name="Language" component={LanguageScreen} />
       <Stack.Screen name="Onboarding" component={OnboardingScreen} />
+      <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
       <Stack.Screen name="Auth" component={AuthScreen} />
       <Stack.Screen name="Home" component={HomeScreen} />
     </Stack.Navigator>
