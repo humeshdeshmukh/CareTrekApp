@@ -7,16 +7,11 @@ import { useColorScheme } from 'react-native';
 import { useTheme } from './src/contexts/theme/ThemeContext';
 import { AppProvider } from './src/providers/AppProvider';
 import { RootNavigator } from './src/navigation/RootNavigator';
-import { LanguageProvider } from './src/contexts/LanguageContext';
-import './src/i18n'; // Import i18n configuration
-
 
 export default function App() {
   return (
     <AppProvider>
-      <LanguageProvider>
-        <AppContent />
-      </LanguageProvider>
+      <AppContent />
     </AppProvider>
   );
 }

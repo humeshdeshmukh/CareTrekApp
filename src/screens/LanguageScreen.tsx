@@ -3,8 +3,6 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, Anima
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path } from 'react-native-svg';
 import { useNavigation } from '@react-navigation/native';
-import { useLanguage } from '../contexts/LanguageContext';
-import i18n from '../i18n';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { useTheme } from '../contexts/theme/ThemeContext';
@@ -28,6 +26,7 @@ const LanguageScreen = () => {
   const navigation = useNavigation<LanguageScreenNavigationProp>();
   const [selectedLanguage, setSelectedLanguage] = useState('en');
   const { isDark } = useTheme();
+  const [isLoading, setIsLoading] = useState(false);
   const { width } = Dimensions.get('window');
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const translateY = useRef(new Animated.Value(20)).current;
@@ -52,13 +51,19 @@ const LanguageScreen = () => {
     navigation.goBack();
   };
 
-  const { setLanguage, isChangingLanguage } = useLanguage();
+  const getText = (key: string) => {
+    const texts: Record<string, string> = {
+      'selectLanguage': 'Select Language',
+      'continue': 'Continue',
+      'languageChanged': 'Language changed successfully',
+      'errorChangingLanguage': 'Error changing language',
+    };
+    return texts[key] || key;
+  };
 
   const handleContinue = async () => {
     try {
-      // Only update the language in AsyncStorage without changing the i18n language yet
       await AsyncStorage.setItem('userLanguage', selectedLanguage);
-      // Navigate to Onboarding
       navigation.replace('Onboarding');
     } catch (error) {
       console.error('Error setting language:', error);
@@ -94,7 +99,9 @@ const LanguageScreen = () => {
                   strokeLinejoin="round"/>
           </Svg>
         </TouchableOpacity>
-        <Text style={[styles.title, { color: textColor }]}>Select Language</Text>
+        <Text style={[styles.title, { color: isDark ? '#FFFFFF' : '#1A202C' }]}>
+          {getText('selectLanguage')}
+        </Text>
       </Animated.View>
       <Animated.View 
         style={[
@@ -105,56 +112,66 @@ const LanguageScreen = () => {
           }
         ]}
       >
-        <Text style={[styles.subtitle, { color: textColor, marginBottom: 20 }]}>Select Your Language</Text>
-
-      <ScrollView style={styles.languageList}>
-        {languages.map((lang) => (
-          <TouchableOpacity
-            key={lang.code}
-            style={[
-              styles.languageItem,
-              { 
-                backgroundColor: cardBg,
-                borderColor: selectedLanguage === lang.code ? primaryColor : 'transparent',
-                borderWidth: 2,
-              }
-            ]}
-            onPress={() => setSelectedLanguage(lang.code)}
-          >
-            <Text style={[styles.languageName, { color: textColor }]}>{lang.name}</Text>
-            <Text style={[styles.languageNative, { color: textColor }]}>{lang.nativeName}</Text>
-            {selectedLanguage === lang.code && (
-              <View style={[styles.selectedIndicator, { backgroundColor: primaryColor }]} />
-            )}
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
+        <Text style={[styles.subtitle, { color: textColor, marginBottom: 20 }]}>
+          Select Your Language
+        </Text>
+        <ScrollView style={styles.languageList}>
+          {languages.map((lang) => (
+            <TouchableOpacity
+              key={lang.code}
+              style={[
+                styles.languageItem,
+                { 
+                  backgroundColor: cardBg,
+                  borderColor: selectedLanguage === lang.code ? primaryColor : 'transparent',
+                  borderWidth: 2,
+                }
+              ]}
+              onPress={() => setSelectedLanguage(lang.code)}
+            >
+              <Text style={[
+                styles.languageName, 
+                { 
+                  color: isDark ? '#E2E8F0' : '#4A5568',
+                  fontWeight: selectedLanguage === lang.code ? 'bold' : 'normal'
+                }
+              ]}>
+                {lang.nativeName} ({lang.name})
+              </Text>
+              {selectedLanguage === lang.code && (
+                <View style={[styles.selectedIndicator, { backgroundColor: primaryColor }]} />
+              )}
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </Animated.View>
 
       <TouchableOpacity
-        style={[styles.continueButton, { backgroundColor: primaryColor, opacity: isChangingLanguage ? 0.7 : 1 }]}
+        style={[styles.continueButton, { backgroundColor: isDark ? '#2F855A' : '#38A169' }]}
         onPress={handleContinue}
-        disabled={isChangingLanguage}
+        disabled={isLoading}
       >
-        {isChangingLanguage ? (
-          <ActivityIndicator color="#FFFFFF" />
-        ) : (
-          <Text style={styles.continueButtonText}>
-            {selectedLanguage === 'hi' ? 'जारी रखें' : 
-             selectedLanguage === 'bn' ? 'চালিয়ে যান' :
-             selectedLanguage === 'te' ? 'కొనసాగించు' :
-             selectedLanguage === 'mr' ? 'सुरू ठेवा' :
-             selectedLanguage === 'ta' ? 'தொடரவும்' :
-             selectedLanguage === 'gu' ? 'ચાલુ રાખો' :
-             selectedLanguage === 'kn' ? 'ಮುಂದುವರಿಸಿ' :
-             selectedLanguage === 'ml' ? 'തുടരുക' :
-             selectedLanguage === 'pa' ? 'ਜਾਰੀ ਰੱਖੋ' :
-             'Continue'}
-          </Text>
-        )}
+        <Text style={styles.continueButtonText}>
+          {getContinueButtonText(selectedLanguage)}
+        </Text>
       </TouchableOpacity>
     </View>
   );
+};
+
+const getContinueButtonText = (langCode: string) => {
+  switch (langCode) {
+    case 'ta': return 'தொடரவும்';
+    case 'gu': return 'ચાલુ રાખો';
+    case 'kn': return 'ಮುಂದುವರಿಸಿ';
+    case 'ml': return 'തുടരുക';
+    case 'pa': return 'ਜਾਰੀ ਰੱਖੋ';
+    case 'hi': return 'जारी रखें';
+    case 'bn': return 'চালিয়ে যান';
+    case 'te': return 'కొనసాగించు';
+    case 'mr': return 'सुरू ठेवा';
+    default: return 'Continue';
+  }
 };
 
 const styles = StyleSheet.create({
@@ -183,7 +200,7 @@ const styles = StyleSheet.create({
     fontFamily: 'Inter_700Bold',
     flex: 1,
     textAlign: 'center',
-    marginRight: 24, // Balance the back button space
+    marginRight: 24,
   },
   subtitle: {
     fontSize: 16,
@@ -206,11 +223,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontFamily: 'Inter_600SemiBold',
   },
-  languageNative: {
-    fontSize: 16,
-    fontFamily: 'Inter_400Regular',
-    marginLeft: 10,
-  },
   selectedIndicator: {
     width: 24,
     height: 24,
@@ -222,6 +234,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     alignItems: 'center',
     marginBottom: 30,
+    marginHorizontal: 20,
   },
   continueButtonText: {
     color: 'white',
