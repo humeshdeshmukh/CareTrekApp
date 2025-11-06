@@ -9,9 +9,9 @@ import {
   Easing, 
   StatusBar,
   Platform,
-  Vibration,
-  SafeAreaView
+  Vibration
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/RootNavigator';
@@ -241,7 +241,7 @@ const WelcomeScreen = () => {
       };
 
   return (
-    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]} edges={['top', 'left', 'right']}>
       <StatusBar 
         barStyle={isDark ? 'light-content' : 'dark-content'} 
         backgroundColor="transparent" 

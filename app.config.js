@@ -5,6 +5,9 @@ module.exports = {
     slug: 'caretrek',
     version: '1.0.0',
     orientation: 'portrait',
+    plugins: [
+      "react-native-ble-plx"
+    ],
     extra: {
       // Add your Google Cloud Translation API key here
       // In production, use EAS secrets or a similar service
