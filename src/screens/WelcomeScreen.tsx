@@ -1,152 +1,316 @@
-import React, { useEffect, useRef } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Dimensions, Animated, Easing } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { 
+  View, 
+  Text, 
+  StyleSheet, 
+  TouchableOpacity, 
+  Dimensions, 
+  Animated, 
+  Easing, 
+  StatusBar,
+  Platform,
+  Vibration,
+  SafeAreaView
+} from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { useTheme } from '../contexts/theme/ThemeContext';
-import { Svg, Path, Defs, LinearGradient, Stop } from 'react-native-svg';
+import { Svg, Path, Defs, LinearGradient, Stop, Circle } from 'react-native-svg';
+import { BlurView } from '@react-native-community/blur';
+import { Ionicons } from '@expo/vector-icons';
 
 type WelcomeScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Welcome'>;
 
-interface WaveAnimationProps {
-  color?: string;
-  style?: any;
-  isDark: boolean;
-}
+const { width, height } = Dimensions.get('window');
 
-const WaveAnimation: React.FC<WaveAnimationProps> = ({ color, style, isDark }) => {
-  const animateWave = useRef(new Animated.Value(0)).current;
+// Particle Component
+const Particle = ({ color, size, style, delay = 0 }) => {
+  const anim = useRef(new Animated.Value(0)).current;
   
   useEffect(() => {
     const animation = Animated.loop(
-      Animated.timing(animateWave, {
-        toValue: 1,
-        duration: 2000,
-        easing: Easing.linear,
-        useNativeDriver: true,
-      })
+      Animated.sequence([
+        Animated.timing(anim, {
+          toValue: 1,
+          duration: 3000 + Math.random() * 2000,
+          delay: delay,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(anim, {
+          toValue: 0,
+          duration: 3000 + Math.random() * 2000,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        })
+      ])
     );
+    
     animation.start();
     return () => animation.stop();
   }, []);
 
-  const translateX = animateWave.interpolate({
+  const translateY = anim.interpolate({
     inputRange: [0, 1],
-    outputRange: ['0%', '-50%']
+    outputRange: [0, -20]
   });
 
-  const wavePath = (height = 40, width = 300, segmentWidth = 300) => {
-    return `M0,${height} 
-      C${width * 0.2},${height * 0.7} ${width * 0.4},${height * 0.3} ${width},${height}
-      C${width * 1.6},${height * 1.7} ${width * 1.8},${height * 1.3} ${width * 2},${height}
-      V${height * 2} H0 Z`;
-  };
+  const opacity = anim.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [0.3, 0.7, 0.3]
+  });
 
   return (
-    <View style={[StyleSheet.absoluteFill, style]}>
-      <Animated.View 
-        style={[{
+    <Animated.View
+      style={[
+        {
           position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          transform: [{ translateX }],
-          width: '200%',
-        }]}
-      >
-        <Svg 
-          width="100%" 
-          height="100%" 
-          viewBox="0 0 300 100" 
-          preserveAspectRatio="none"
-        >
-          <Defs>
-            <LinearGradient id="waveGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-              <Stop offset="0%" stopColor={isDark ? '#2D3748' : '#E2E8F0'} stopOpacity="0.8" />
-              <Stop offset="100%" stopColor={isDark ? '#4A5568' : '#CBD5E0'} stopOpacity="0.8" />
-            </LinearGradient>
-          </Defs>
-          <Path 
-            d={wavePath(40, 300, 300)} 
-            fill="url(#waveGradient)"
-          />
-        </Svg>
-      </Animated.View>
-    </View>
+          width: size,
+          height: size,
+          borderRadius: size / 2,
+          backgroundColor: color,
+          transform: [{ translateY }],
+          opacity,
+        },
+        style,
+      ]}
+    />
   );
 };
 
-const WelcomeScreen = () => {
-  const navigation = useNavigation<WelcomeScreenNavigationProp>();
-  const { isDark } = useTheme();
-  const fadeAnim = useRef(new Animated.Value(0)).current;
-  const scaleAnim = useRef(new Animated.Value(0.8)).current;
-  const pulseAnim = useRef(new Animated.Value(1)).current;
-  const { width } = Dimensions.get('window');
+// Animated Background Gradient
+const AnimatedBackground = ({ isDark }) => {
+  const gradientAnim = useRef(new Animated.Value(0)).current;
   
-  // Animation effects
   useEffect(() => {
-    // Fade in and scale up animation
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 1000,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        tension: 20,
-        friction: 7,
-        useNativeDriver: true,
-      })
-    ]).start();
-
-    // Pulsing animation for the next button
     Animated.loop(
       Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1.1,
-          duration: 1000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
+        Animated.timing(gradientAnim, {
           toValue: 1,
-          duration: 1000,
-          useNativeDriver: true,
+          duration: 10000,
+          useNativeDriver: false,
+        }),
+        Animated.timing(gradientAnim, {
+          toValue: 0,
+          duration: 10000,
+          useNativeDriver: false,
         })
       ])
     ).start();
   }, []);
 
+  const gradientStart = isDark ? '#171923' : '#FFFBEF';
+  const gradientEnd = isDark ? '#2D3748' : '#E2E8F0';
+  
+  const gradientColors = gradientAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [gradientStart, gradientEnd],
+  });
+
+  return (
+    <Animated.View 
+      style={[StyleSheet.absoluteFill, { 
+        backgroundColor: gradientColors,
+      }]}
+    />
+  );
+};
+
+const WelcomeScreen = () => {
+  const navigation = useNavigation<WelcomeScreenNavigationProp>();
+  const { isDark, theme } = useTheme();
+  const [isPressed, setIsPressed] = useState(false);
+  
+  // Animation values
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideUp = useRef(new Animated.Value(50)).current;
+  const scaleAnim = useRef(new Animated.Value(0.9)).current;
+  const buttonScale = useRef(new Animated.Value(1)).current;
+  const buttonPressAnim = useRef(new Animated.Value(0)).current;
+  
+  // Generate particles
+  const particles = Array(15).fill(0).map((_, i) => ({
+    id: i,
+    size: Math.random() * 6 + 2,
+    left: `${Math.random() * 100}%`,
+    top: `${Math.random() * 100}%`,
+    delay: Math.random() * 2000,
+  }));
+
+  // Animation effects
+  useEffect(() => {
+    // Reset animations
+    fadeAnim.setValue(0);
+    slideUp.setValue(50);
+    scaleAnim.setValue(0.9);
+    
+    // Start animations
+    Animated.parallel([
+      // Fade in
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 800,
+        useNativeDriver: true,
+        delay: 300,
+      }),
+      // Slide up
+      Animated.timing(slideUp, {
+        toValue: 0,
+        duration: 1000,
+        useNativeDriver: true,
+        easing: Easing.out(Easing.cubic),
+      }),
+      // Scale in
+      Animated.spring(scaleAnim, {
+        toValue: 1,
+        tension: 50,
+        friction: 8,
+        useNativeDriver: true,
+      }),
+      // Button press animation
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(buttonScale, {
+            toValue: 1.05,
+            duration: 1500,
+            useNativeDriver: true,
+          }),
+          Animated.timing(buttonScale, {
+            toValue: 1,
+            duration: 1500,
+            useNativeDriver: true,
+          })
+        ])
+      )
+    ]).start();
+  }, []);
+
+  const handlePressIn = () => {
+    setIsPressed(true);
+    Vibration.vibrate(5);
+    Animated.spring(buttonPressAnim, {
+      toValue: 1,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handlePressOut = () => {
+    setIsPressed(false);
+    Animated.spring(buttonPressAnim, {
+      toValue: 0,
+      useNativeDriver: true,
+    }).start();
+  };
+
   const handleNext = () => {
     navigation.navigate('Language');
   };
 
-  const bgColor = isDark ? '#171923' : '#FFFBEF';
-  const textColor = isDark ? '#E2E8F0' : '#2D3748';
-  const buttonBg = isDark ? '#48BB78' : '#2F855A';
+
+  // Theme colors
+  const colors = {
+    text: isDark ? '#E2E8F0' : '#2D3748',
+    subtext: isDark ? '#E2E8F0' : '#2D3748',
+    button: isDark ? '#48BB78' : '#2F855A',
+    buttonPressed: isDark ? '#38A169' : '#2C7A5B',
+    background: isDark ? '#171923' : '#FFFBEF',
+    card: isDark ? '#2D3748' : '#FFFFFF',
+    shadow: isDark ? '#00000040' : '#2D374840',
+  };
+
+  const buttonScaleInterpolate = buttonPressAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [1, 0.95],
+  });
+
+  const buttonShadow = isPressed 
+    ? {
+        shadowColor: colors.shadow,
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 3,
+        elevation: 4,
+      }
+    : {
+        shadowColor: colors.shadow,
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.3,
+        shadowRadius: 15,
+        elevation: 8,
+      };
 
   return (
-    <View style={[styles.container, { backgroundColor: bgColor }]}>
-      {/* Wave Animation Background */}
-      <WaveAnimation 
-        color={isDark ? '#2D3748' : '#E2E8F0'} 
-        style={styles.waveContainer}
-        isDark={isDark}
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <StatusBar 
+        barStyle={isDark ? 'light-content' : 'dark-content'} 
+        backgroundColor="transparent" 
+        translucent 
       />
+      
+      {/* Animated Background */}
+      <AnimatedBackground isDark={isDark} />
+      
+      {/* Particles */}
+      {particles.map((particle) => (
+        <Particle
+          key={particle.id}
+          size={particle.size}
+          color={isDark ? '#48BB78' : '#2F855A'}
+          style={{
+            left: particle.left,
+            top: particle.top,
+            opacity: 0.5,
+          }}
+          delay={particle.delay}
+        />
+      ))}
 
-      {/* App Name */}
+{/* Main Content */}
       <Animated.View 
         style={[
-          styles.appNameContainer,
+          styles.contentContainer,
           { 
             opacity: fadeAnim,
-            transform: [{ scale: scaleAnim }],
+            transform: [
+              { translateY: slideUp },
+              { scale: scaleAnim }
+            ],
           }
         ]}
       >
-        <Text style={[styles.appName, { color: textColor }]}>CareTrek</Text>
-        <Text style={[styles.tagline, { color: textColor }]}>Journey Together</Text>
+        {/* App Icon */}
+        <Animated.View 
+          style={[
+            styles.iconContainer,
+            { 
+              backgroundColor: isDark ? 'rgba(45, 55, 72, 0.7)' : 'rgba(255, 255, 255, 0.7)',
+              borderColor: isDark ? 'rgba(72, 187, 120, 0.3)' : 'rgba(47, 133, 90, 0.3)',
+              transform: [{ 
+                rotate: buttonPressAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: ['0deg', '5deg']
+                }) 
+              }]
+            }
+          ]}
+        >
+          <Ionicons 
+            name="heart-circle" 
+            size={80} 
+            color={isDark ? '#48BB78' : '#2F855A'} 
+          />
+        </Animated.View>
+
+        {/* App Name & Tagline */}
+        <View style={styles.textContainer}>
+          <Text style={[styles.appName, { color: colors.text }]}>
+            CareTrek
+          </Text>
+          <Text style={[styles.tagline, { color: colors.subtext }]}>
+            Your Journey to Better Care
+          </Text>
+        </View>
       </Animated.View>
 
       {/* Next Button */}
@@ -155,27 +319,39 @@ const WelcomeScreen = () => {
           styles.buttonContainer,
           { 
             opacity: fadeAnim,
-            transform: [{ scale: pulseAnim }],
+            transform: [
+              { scale: buttonScale },
+              { 
+                translateY: buttonPressAnim.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 5]
+                }) 
+              }
+            ],
           }
         ]}
       >
         <TouchableOpacity 
-          style={[styles.nextButton, { backgroundColor: buttonBg }]}
+          style={[
+            styles.nextButton, 
+            { 
+              backgroundColor: isPressed ? colors.buttonPressed : colors.button,
+              ...buttonShadow,
+            }
+          ]}
           onPress={handleNext}
-          activeOpacity={0.8}
+          onPressIn={handlePressIn}
+          onPressOut={handlePressOut}
+          activeOpacity={0.9}
         >
-          <Svg width="32" height="32" viewBox="0 0 24 24" fill="none">
-            <Path 
-              d="M5 12H19M19 12L12 5M19 12L12 19" 
-              stroke="white" 
-              strokeWidth="2" 
-              strokeLinecap="round" 
-              strokeLinejoin="round"
-            />
-          </Svg>
+          <Ionicons 
+            name="arrow-forward" 
+            size={28} 
+            color="white" 
+          />
         </TouchableOpacity>
       </Animated.View>
-    </View>
+    </SafeAreaView>
   );
 };
 
@@ -184,34 +360,63 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight : 0,
   },
-  waveContainer: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    height: '30%',
-  },
-  appNameContainer: {
+  contentContainer: {
+    flex: 1,
+    justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 100,
+    paddingHorizontal: 30,
+    width: '100%',
+  },
+  iconContainer: {
+    width: 140,
+    height: 140,
+    borderRadius: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 40,
+    borderWidth: 2,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.1,
+        shadowRadius: 20,
+      },
+      android: {
+        elevation: 10,
+      },
+    }),
+  },
+  textContainer: {
+    alignItems: 'center',
+    marginBottom: 60,
   },
   appName: {
-    fontSize: 42,
+    fontSize: 48,
     fontWeight: 'bold',
-    fontFamily: 'Inter_700Bold',
-    letterSpacing: 1,
-    marginBottom: 10,
+    fontFamily: 'Inter_800ExtraBold',
+    letterSpacing: 0.5,
+    marginBottom: 12,
+    textAlign: 'center',
+    lineHeight: 52,
   },
   tagline: {
     fontSize: 18,
-    fontFamily: 'Inter_400Regular',
-    opacity: 0.8,
-    letterSpacing: 0.5,
+    fontFamily: 'Inter_500Medium',
+    opacity: 0.9,
+    letterSpacing: 0.3,
+    textAlign: 'center',
+    lineHeight: 26,
+    maxWidth: '80%',
   },
   buttonContainer: {
     position: 'absolute',
     bottom: 60,
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
   },
   nextButton: {
     width: 70,
@@ -219,11 +424,17 @@ const styles = StyleSheet.create({
     borderRadius: 35,
     alignItems: 'center',
     justifyContent: 'center',
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
+    ...Platform.select({
+      ios: {
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.3,
+        shadowRadius: 15,
+      },
+      android: {
+        elevation: 8,
+      },
+    }),
   },
 });
 
