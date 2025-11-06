@@ -40,7 +40,8 @@ const LanguageScreen = () => {
   }, []);
 
   const handleBack = () => {
-    navigation.goBack();
+    // Navigate to Welcome screen instead of going back
+    navigation.navigate('Welcome');
   };
 
   const handleLanguageSelect = (languageCode: LanguageCode) => {

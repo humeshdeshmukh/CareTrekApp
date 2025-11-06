@@ -3,9 +3,7 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { useTheme } from '../contexts/theme/ThemeContext';
 
 // Import screens
-import HomeScreen from '../screens/HomeScreen';
 import OnboardingScreen from '../screens/OnboardingScreen';
-import AuthScreen from '../screens/AuthScreen';
 import LanguageScreen from '../screens/LanguageScreen';
 import WelcomeScreen from '../screens/WelcomeScreen';
 import RoleSelectionScreen from '../screens/RoleSelectionScreen';
@@ -15,8 +13,6 @@ export type RootStackParamList = {
   Language: undefined;
   Onboarding: undefined;
   RoleSelection: undefined;
-  Auth: undefined;
-  Home: undefined;
   // Add other screen types here
 };
 
@@ -44,8 +40,6 @@ export const RootNavigator = () => {
       <Stack.Screen name="Language" component={LanguageScreen} />
       <Stack.Screen name="Onboarding" component={OnboardingScreen} />
       <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
-      <Stack.Screen name="Auth" component={AuthScreen} />
-      <Stack.Screen name="Home" component={HomeScreen} />
     </Stack.Navigator>
   );
 };

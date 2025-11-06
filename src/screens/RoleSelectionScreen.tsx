@@ -1,18 +1,30 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Image, Animated } from 'react-native';
+import React from 'react';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { useTheme } from '../contexts/theme/ThemeContext';
+import { useTranslation } from '../contexts/translation/TranslationContext';
+import { useCachedTranslation } from '../hooks/useCachedTranslation';
 
 type RoleSelectionScreenNavigationProp = StackNavigationProp<RootStackParamList, 'RoleSelection'>;
 
 const RoleSelectionScreen = ({ navigation }: { navigation: RoleSelectionScreenNavigationProp }) => {
   const { isDark } = useTheme();
+  const { currentLanguage } = useTranslation();
+  
+  // Translations
+  const { translatedText: backText } = useCachedTranslation('← Back', currentLanguage);
+  const { translatedText: iAmText } = useCachedTranslation('I am a...', currentLanguage);
+  const { translatedText: chooseRoleText } = useCachedTranslation('Choose your role to get started', currentLanguage);
+  const { translatedText: personalizationText } = useCachedTranslation('This helps us personalize your experience', currentLanguage);
+  const { translatedText: seniorText } = useCachedTranslation('I\'m a Senior Citizen', currentLanguage);
+  const { translatedText: familyText } = useCachedTranslation('I\'m a Family Member', currentLanguage);
 
   const handleRoleSelect = (role: 'senior' | 'family') => {
     console.log(`Selected role: ${role}`);
-    navigation.navigate('Auth');
+    // Navigate to Onboarding after role selection
+    navigation.navigate('Onboarding');
   };
 
   return (
@@ -24,7 +36,7 @@ const RoleSelectionScreen = ({ navigation }: { navigation: RoleSelectionScreenNa
           activeOpacity={0.7}
         >
           <Text style={[styles.backButtonText, { color: isDark ? '#E2E8F0' : '#4A5568' }]}>
-            ← Back
+            {backText}
           </Text>
         </TouchableOpacity>
 
@@ -35,13 +47,13 @@ const RoleSelectionScreen = ({ navigation }: { navigation: RoleSelectionScreenNa
         <View style={styles.mainContent}>
           <View style={styles.textContainer}>
             <Text style={[styles.title, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>
-              I am a...
+              {iAmText}
             </Text>
             <Text style={[styles.subtitle, { color: isDark ? '#94A3B8' : '#64748B' }]}>
-              Choose your role to get started
+              {chooseRoleText}
             </Text>
             <Text style={[styles.tagline, { color: isDark ? '#CBD5E1' : '#475569' }]}>
-              This helps us personalize your experience
+              {personalizationText}
             </Text>
           </View>
 
@@ -51,7 +63,7 @@ const RoleSelectionScreen = ({ navigation }: { navigation: RoleSelectionScreenNa
               onPress={() => handleRoleSelect('senior')}
               activeOpacity={0.8}
             >
-              <Text style={[styles.buttonText, { color: 'white' }]}>I'm a Senior Citizen</Text>
+              <Text style={[styles.buttonText, { color: 'white' }]}>{seniorText}</Text>
             </TouchableOpacity>
             
             <TouchableOpacity 
@@ -60,7 +72,7 @@ const RoleSelectionScreen = ({ navigation }: { navigation: RoleSelectionScreenNa
               activeOpacity={0.8}
             >
               <Text style={[styles.buttonText, { color: isDark ? '#48BB78' : '#2F855A' }]}>
-                I'm a Family Member
+                {familyText}
               </Text>
             </TouchableOpacity>
           </View>
