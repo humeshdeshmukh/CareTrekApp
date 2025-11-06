@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { useColorScheme } from 'react-native';
+import { useColorScheme, Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 
 type ThemeMode = 'light' | 'dark' | 'system';
@@ -17,7 +17,7 @@ const THEME_KEY = 'caretrek_theme_preference';
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const systemColorScheme = useColorScheme();
-  const [theme, setTheme] = useState<ThemeMode>('system');
+  const [theme, setTheme] = useState<ThemeMode>('light'); // Default to light theme
   const [isDark, setIsDark] = useState(false);
 
   // Load saved theme preference
@@ -41,12 +41,19 @@ export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const dark = theme === 'dark' || (theme === 'system' && systemColorScheme === 'dark');
     setIsDark(dark);
     
-    // Update document element for web
-    if (typeof document !== 'undefined') {
-      if (dark) {
-        document.documentElement.classList.add('dark');
-      } else {
-        document.documentElement.classList.remove('dark');
+    // Only run web-specific code in web environment
+    if (Platform.OS === 'web') {
+      // Use optional chaining and type checking to be extra safe
+      const doc = typeof document !== 'undefined' ? document : null;
+      if (doc?.documentElement) {
+        const root = doc.documentElement;
+        if (dark) {
+          root.classList.add('dark');
+        } else {
+          root.classList.remove('dark');
+        }
+        const themeValue = theme === 'system' ? systemColorScheme || 'light' : theme;
+        root.setAttribute('data-theme', themeValue);
       }
     }
   }, [theme, systemColorScheme]);

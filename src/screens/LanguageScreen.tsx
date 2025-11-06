@@ -1,30 +1,22 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Dimensions, Animated, ActivityIndicator } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import Svg, { Path } from 'react-native-svg';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { useTheme } from '../contexts/theme/ThemeContext';
+import { useTranslation } from '../contexts/translation/TranslationContext';
+import { getAvailableLanguages, LanguageCode } from '../services/TranslationService';
 
 type LanguageScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Language'>;
 
-const languages = [
-  { code: 'en', name: 'English', nativeName: 'English' },
-  { code: 'hi', name: 'Hindi', nativeName: 'हिंदी' },
-  { code: 'bn', name: 'Bengali', nativeName: 'বাংলা' },
-  { code: 'te', name: 'Telugu', nativeName: 'తెలుగు' },
-  { code: 'mr', name: 'Marathi', nativeName: 'मराठी' },
-  { code: 'ta', name: 'Tamil', nativeName: 'தமிழ்' },
-  { code: 'gu', name: 'Gujarati', nativeName: 'ગુજરાતી' },
-  { code: 'kn', name: 'Kannada', nativeName: 'ಕನ್ನಡ' },
-  { code: 'ml', name: 'Malayalam', nativeName: 'മലയാളം' },
-  { code: 'pa', name: 'Punjabi', nativeName: 'ਪੰਜਾਬੀ' },
-];
+// Get available languages from the service
+const languages = getAvailableLanguages();
 
 const LanguageScreen = () => {
   const navigation = useNavigation<LanguageScreenNavigationProp>();
-  const [selectedLanguage, setSelectedLanguage] = useState('en');
+  const { currentLanguage, setLanguage, isTranslating } = useTranslation();
+  const [selectedLanguage, setSelectedLanguage] = useState<LanguageCode>(currentLanguage);
   const { isDark } = useTheme();
   const [isLoading, setIsLoading] = useState(false);
   const { width } = Dimensions.get('window');
@@ -51,6 +43,27 @@ const LanguageScreen = () => {
     navigation.goBack();
   };
 
+  const handleLanguageSelect = (languageCode: LanguageCode) => {
+    setSelectedLanguage(languageCode);
+  };
+
+  const handleContinue = async () => {
+    setIsLoading(true);
+    try {
+      await setLanguage(selectedLanguage);
+      // Navigate to Onboarding screen after language selection
+      navigation.navigate('Onboarding');
+    } catch (error) {
+      console.error('Error changing language:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setSelectedLanguage(currentLanguage);
+  }, [currentLanguage]);
+
   const getText = (key: string) => {
     const texts: Record<string, string> = {
       'selectLanguage': 'Select Language',
@@ -59,15 +72,6 @@ const LanguageScreen = () => {
       'errorChangingLanguage': 'Error changing language',
     };
     return texts[key] || key;
-  };
-
-  const handleContinue = async () => {
-    try {
-      await AsyncStorage.setItem('userLanguage', selectedLanguage);
-      navigation.replace('Onboarding');
-    } catch (error) {
-      console.error('Error setting language:', error);
-    }
   };
 
   const bgColor = isDark ? '#171923' : '#FFFBEF';

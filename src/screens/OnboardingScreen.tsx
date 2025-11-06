@@ -1,16 +1,26 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Image, ImageSourcePropType } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/RootNavigator';
 import { useTheme } from '../contexts/theme/ThemeContext';
+import { useTranslation } from '../contexts/translation/TranslationContext';
+import { useCachedTranslation } from '../hooks/useCachedTranslation';
 
 type OnboardingScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Onboarding'>;
 
 const OnboardingScreen = () => {
   const navigation = useNavigation<OnboardingScreenNavigationProp>();
   const { isDark } = useTheme();
+  const { currentLanguage } = useTranslation();
+  
+  // Use the translation hook for each text element
+  const { translatedText: welcomeTitle } = useCachedTranslation('Welcome to CareTrek', currentLanguage);
+  const { translatedText: welcomeSubtitle } = useCachedTranslation('Your trusted companion for senior care and family connection', currentLanguage);
+  const { translatedText: welcomeTagline } = useCachedTranslation('Bridging generations with care and technology', currentLanguage);
+  const { translatedText: getStartedText } = useCachedTranslation('Get Started', currentLanguage);
+  const { translatedText: changeLanguageText } = useCachedTranslation('Change Language', currentLanguage);
   
   const welcomeImage: ImageSourcePropType = require('../../assets/ChatGPT Image Nov 6, 2025, 07_19_20 PM.png');
   
@@ -49,13 +59,13 @@ const OnboardingScreen = () => {
           
           <View style={styles.textContainer}>
             <Text style={[styles.title, { color: isDark ? '#F8FAFC' : '#1E293B' }]}>
-              Welcome to CareTrek
+              {welcomeTitle}
             </Text>
             <Text style={[styles.subtitle, { color: isDark ? '#94A3B8' : '#64748B' }]}>
-              Your trusted companion for senior care and family connection
+              {welcomeSubtitle}
             </Text>
             <Text style={[styles.tagline, { color: isDark ? '#CBD5E1' : '#475569' }]}>
-              Bridging generations with care and technology
+              {welcomeTagline}
             </Text>
           </View>
         </View>
@@ -68,7 +78,7 @@ const OnboardingScreen = () => {
             activeOpacity={0.8}
           >
             <Text style={[styles.buttonText, { color: 'white' }]}>
-              Get Started
+              {getStartedText}
             </Text>
           </TouchableOpacity>
 
@@ -78,7 +88,7 @@ const OnboardingScreen = () => {
             activeOpacity={0.8}
           >
             <Text style={[styles.buttonText, { color: isDark ? '#48BB78' : '#2F855A' }]}>
-              Change Language
+              {changeLanguageText}
             </Text>
           </TouchableOpacity>
         </View>
