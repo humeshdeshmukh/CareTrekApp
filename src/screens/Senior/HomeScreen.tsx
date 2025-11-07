@@ -23,6 +23,7 @@ const HomeScreen = () => {
   const { translatedText: mapText } = useCachedTranslation('Map', currentLanguage);
   const { translatedText: idShareText } = useCachedTranslation('ID Share', currentLanguage);
   const { translatedText: sosText } = useCachedTranslation('SOS', currentLanguage);
+  const { translatedText: sosContactsText } = useCachedTranslation('SOS Contacts', currentLanguage);
   const { translatedText: quickActionsText } = useCachedTranslation('Quick Actions', currentLanguage);
   const { translatedText: backText } = useCachedTranslation('Back', currentLanguage);
 
@@ -58,7 +59,7 @@ const HomeScreen = () => {
         {/* SOS Button */}
         <TouchableOpacity
           style={[styles.sosButton, { backgroundColor: isDark ? '#E53E3E' : '#F56565' }]}
-          onPress={() => console.log('SOS Triggered')}
+          onPress={() => navigation.navigate('SOSContacts')}
         >
           <Ionicons name="alert-circle" size={40} color="white" />
           <Text style={styles.sosButtonText}>{sosText}</Text>

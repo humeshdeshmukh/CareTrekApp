@@ -14,6 +14,7 @@ import HealthScreen from '../screens/Senior/HealthScreen';
 import MapScreen from '../screens/Senior/MapScreen';
 import RemindersScreen from '../screens/Senior/RemindersScreen';
 import IdShareScreen from '../screens/Senior/IdShareScreen';
+import SOSContactsScreen from '../screens/Senior/SOSContactsScreen';
 
 // Import family screens
 import HomeScreenFamily from '../screens/family/HomeScreenFamily';
@@ -65,6 +66,9 @@ export type RootStackParamList = {
   
   // Id Share Screen
   IdShare: undefined;
+  Map: undefined;
+  Reminders: undefined;
+  SOSContacts: undefined;
   
   // Add index signature for dynamic routes
   [key: string]: undefined | object;
@@ -88,6 +92,7 @@ const RootNavigator = () => {
       <Stack.Screen name="Language" component={LanguageScreen} />
       <Stack.Screen name="Onboarding" component={OnboardingScreen} />
       <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
+      <Stack.Screen name="SOSContacts" component={SOSContactsScreen} />
       
       {/* Main App Tabs */}
       <Stack.Screen 
