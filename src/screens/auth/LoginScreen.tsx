@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,168 +10,235 @@ import {
   ScrollView,
   Alert,
   ActivityIndicator,
+  Keyboard,
+  Animated,
+  Easing,
+  SafeAreaView,
 } from 'react-native';
-import { useNavigation, CommonActions } from '@react-navigation/native';
+import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
-import { AuthStackParamList } from '../../navigation/AuthNavigator';
 import { RootStackParamList } from '../../navigation/RootNavigator';
 import { useTheme } from '../../contexts/theme/ThemeContext';
 import { useAuth } from '../../contexts/auth/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 
-type LoginScreenNavigationProp = StackNavigationProp<AuthStackParamList, 'Login'> & {
-  reset: (state: any) => void;
-};
+type LoginScreenNavigationProp = StackNavigationProp<RootStackParamList, 'OTPVerification'>;
 
 const LoginScreen = () => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
+  const [phoneNumber, setPhoneNumber] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const shakeAnimation = useRef(new Animated.Value(0)).current;
+  const phoneInputRef = useRef<TextInput>(null);
   
   const navigation = useNavigation<LoginScreenNavigationProp>();
-  const { isDark, theme } = useTheme();
-  const { login, guestLogin } = useAuth();
+  const { colors } = useTheme();
+  const { loginWithPhone } = useAuth();
+
+  // Format phone number as user types
+  const formatPhoneNumber = (text: string) => {
+    // Remove all non-digit characters
+    const cleaned = ('' + text).replace(/\D/g, '');
+    
+    // Format as (XXX) XXX-XXXX for US numbers
+    const match = cleaned.match(/^(\d{0,3})(\d{0,3})(\d{0,4})$/);
+    if (match) {
+      const formatted = !match[2] 
+        ? match[1] 
+        : `(${match[1]}) ${match[2]}${match[3] ? `-${match[3]}` : ''}`;
+      return formatted;
+    }
+    return text;
+  };
+
+  const handlePhoneNumberChange = (text: string) => {
+    // Remove all non-digit characters
+    const cleaned = text.replace(/\D/g, '');
+    setPhoneNumber(cleaned);
+  };
+
+  const handlePhoneNumberSubmit = () => {
+    if (phoneNumber.length < 10) {
+      // Show error animation for invalid phone number
+      shakeAnimation.setValue(0);
+      Animated.timing(shakeAnimation, {
+        toValue: 10,
+        duration: 50,
+        useNativeDriver: true,
+        easing: Easing.linear,
+      }).start(() => {
+        Animated.timing(shakeAnimation, {
+          toValue: -10,
+          duration: 50,
+          useNativeDriver: true,
+        }).start(() => {
+          Animated.timing(shakeAnimation, {
+            toValue: 0,
+            duration: 50,
+            useNativeDriver: true,
+          }).start();
+        });
+      });
+      
+      phoneInputRef.current?.focus();
+      Alert.alert('Invalid Phone Number', 'Please enter a valid 10-digit phone number');
+      return;
+    }
+    
+    handleLogin();
+  };
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      Alert.alert('Error', 'Please fill in all fields');
+    if (phoneNumber.length < 10) {
+      // Show error animation for invalid phone number
+      shakeAnimation.setValue(0);
+      Animated.timing(shakeAnimation, {
+        toValue: 10,
+        duration: 50,
+        useNativeDriver: true,
+        easing: Easing.linear,
+      }).start(() => {
+        Animated.timing(shakeAnimation, {
+          toValue: -10,
+          duration: 50,
+          useNativeDriver: true,
+        }).start(() => {
+          Animated.timing(shakeAnimation, {
+            toValue: 0,
+            duration: 50,
+            useNativeDriver: true,
+          }).start();
+        });
+      });
       return;
     }
     
     setIsLoading(true);
+    Keyboard.dismiss();
+    
     try {
-      await login(email, password);
-      // Navigation is handled by the AuthContext after successful login
-    } catch (error) {
-      Alert.alert('Login Failed', error instanceof Error ? error.message : 'An error occurred during login');
+      const formattedPhone = `+1${phoneNumber.replace(/\D/g, '')}`; // US numbers
+      const confirmation = await loginWithPhone(formattedPhone);
+      
+      navigation.navigate('OTPVerification', {
+        phoneNumber: formattedPhone,
+        verificationId: 'web-sdk-verification' // This is a placeholder, not used in Web SDK
+      });
+    } catch (error: any) {
+      console.error('Login error:', error);
+      Alert.alert(
+        'Error',
+        error.message || 'Failed to send verification code. Please try again.'
+      );
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleGuestMode = async () => {
-    setIsLoading(true);
-    try {
-      await guestLogin();
-      // Navigation is handled by the AuthContext after guest login
-    } catch (error) {
-      console.error('Error in guest mode:', error);
-      Alert.alert('Error', 'Failed to enter guest mode. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
+  const handleGuestMode = () => {
+    // Handle guest mode if needed
+    console.log('Guest mode');
   };
 
   return (
-    <KeyboardAvoidingView
-      style={[styles.container, { backgroundColor: theme.background }]}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-    >
-      <ScrollView contentContainerStyle={styles.scrollContainer}>
-        <View style={styles.header}>
-          <Text style={[styles.title, { color: theme.text }]}>Welcome Back</Text>
-          <Text style={[styles.subtitle, { color: theme.textSecondary }]}>
-            Sign in to continue
-          </Text>
-        </View>
-
-        <View style={styles.form}>
-          <View style={styles.inputContainer}>
-            <Ionicons 
-              name="mail-outline" 
-              size={20} 
-              color={theme.textSecondary} 
-              style={styles.inputIcon} 
-            />
-            <TextInput
-              style={[styles.input, { color: theme.text, borderColor: theme.border }]}
-              placeholder="Email"
-              placeholderTextColor={theme.textSecondary}
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-            />
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={styles.keyboardAvoidingView}
+      >
+        <ScrollView 
+          contentContainerStyle={styles.scrollContainer}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.header}>
+            <Text style={[styles.title, { color: colors.text }]}>Welcome to CareTrek</Text>
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
+              Enter your phone number to continue
+            </Text>
           </View>
 
-          <View style={styles.inputContainer}>
-            <Ionicons 
-              name="lock-closed-outline" 
-              size={20} 
-              color={theme.textSecondary} 
-              style={styles.inputIcon} 
-            />
-            <TextInput
-              style={[styles.input, { color: theme.text, borderColor: theme.border }]}
-              placeholder="Password"
-              placeholderTextColor={theme.textSecondary}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry={!showPassword}
-            />
-            <TouchableOpacity 
-              style={styles.eyeIcon}
-              onPress={() => setShowPassword(!showPassword)}
-            >
-              <Ionicons 
-                name={showPassword ? 'eye-off-outline' : 'eye-outline'} 
-                size={20} 
-                color={theme.textSecondary} 
+          <Animated.View 
+            style={[
+              styles.form,
+              {
+                transform: [{ translateX: shakeAnimation }],
+                borderColor: phoneNumber.length > 0 && phoneNumber.length < 10 ? colors.error : colors.border
+              }
+            ]}
+          >
+            <View style={styles.inputContainer}>
+              <View style={[styles.countryCode, { borderColor: colors.border }]}>
+                <Text style={[styles.countryCodeText, { color: colors.text }]}>+1</Text>
+              </View>
+              <TextInput
+                ref={phoneInputRef}
+                style={[
+                  styles.phoneInput, 
+                  { 
+                    color: colors.text, 
+                    borderColor: colors.border,
+                    backgroundColor: colors.card,
+                  }
+                ]}
+                placeholder="(555) 123-4567"
+                placeholderTextColor={colors.textSecondary}
+                value={formatPhoneNumber(phoneNumber)}
+                onChangeText={handlePhoneNumberChange}
+                keyboardType="phone-pad"
+                autoFocus
+                maxLength={14} // (XXX) XXX-XXXX
+                returnKeyType="send"
+                onSubmitEditing={handlePhoneNumberSubmit}
               />
-            </TouchableOpacity>
-          </View>
+            </View>
+          </Animated.View>
 
-          <TouchableOpacity 
-            style={[styles.loginButton, { 
-              backgroundColor: '#4A90E2', // Hardcoded primary color as fallback
-              opacity: isLoading ? 0.7 : 1,
-            }]}
-            onPress={handleLogin}
-            disabled={isLoading}
+          <TouchableOpacity
+            style={[
+              styles.continueButton,
+              { 
+                backgroundColor: colors.primary,
+                opacity: phoneNumber.length >= 10 ? 1 : 0.7,
+              }
+            ]}
+            onPress={handlePhoneNumberSubmit}
+            disabled={isLoading || phoneNumber.length < 10}
           >
             {isLoading ? (
-              <ActivityIndicator color="#fff" />
+              <ActivityIndicator color="white" />
             ) : (
-              <Text style={styles.buttonText}>Sign In</Text>
+              <Text style={styles.continueButtonText}>Continue</Text>
             )}
           </TouchableOpacity>
 
           <View style={styles.dividerContainer}>
-            <View style={[styles.divider, { backgroundColor: theme.border }]} />
-            <Text style={[styles.dividerText, { color: theme.textSecondary }]}>OR</Text>
-            <View style={[styles.divider, { backgroundColor: theme.border }]} />
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
+            <Text style={[styles.dividerText, { color: colors.textSecondary }]}>or</Text>
+            <View style={[styles.divider, { backgroundColor: colors.border }]} />
           </View>
 
           <TouchableOpacity 
-            style={[styles.guestButton, { 
-              borderColor: theme.primary,
-              opacity: isLoading ? 0.7 : 1,
-            }]}
+            style={[styles.guestButton, { borderColor: colors.border }]} 
             onPress={handleGuestMode}
             disabled={isLoading}
           >
-            {isLoading ? (
-              <ActivityIndicator color={theme.primary} />
-            ) : (
-              <Text style={[styles.guestButtonText, { color: '#4A90E2' /* Hardcoded primary color */ }]}>
-                Continue as Guest
-              </Text>
-            )}
+            <Text style={[styles.guestButtonText, { color: colors.text }]}>Continue as Guest</Text>
           </TouchableOpacity>
-        </View>
 
-        <View style={styles.footer}>
-          <Text style={[styles.footerText, { color: theme.textSecondary }]}>
-            Don't have an account?{' '}
-          </Text>
-          <TouchableOpacity onPress={() => navigation.navigate('Register')}>
-            <Text style={[styles.signUpText, { color: '#4A90E2' /* Hardcoded primary color */ }]}>Sign Up</Text>
-          </TouchableOpacity>
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+          <View style={styles.footer}>
+            <Text style={[styles.footerText, { color: colors.textSecondary }]}>
+              By continuing, you agree to our{' '}
+              <Text style={[styles.linkText, { color: colors.primary }]} onPress={() => {}}>
+                Terms of Service
+              </Text>{' '}
+              and{' '}
+              <Text style={[styles.linkText, { color: colors.primary }]} onPress={() => {}}>
+                Privacy Policy
+              </Text>
+            </Text>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
@@ -179,14 +246,16 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
+  keyboardAvoidingView: {
+    flex: 1,
+  },
   scrollContainer: {
     flexGrow: 1,
-    padding: 20,
-    justifyContent: 'space-between',
+    padding: 24,
+    justifyContent: 'center',
   },
   header: {
-    marginTop: 60,
-    marginBottom: 40,
+    marginBottom: 32,
     alignItems: 'center',
   },
   title: {
@@ -196,82 +265,88 @@ const styles = StyleSheet.create({
   },
   subtitle: {
     fontSize: 16,
-    opacity: 0.8,
+    textAlign: 'center',
+    paddingHorizontal: 20,
   },
   form: {
-    width: '100%',
+    marginBottom: 24,
+    borderRadius: 12,
+    overflow: 'hidden',
   },
   inputContainer: {
-    marginBottom: 20,
     flexDirection: 'row',
     alignItems: 'center',
-    position: 'relative',
+    borderRadius: 12,
+    overflow: 'hidden',
   },
-  inputIcon: {
-    position: 'absolute',
-    left: 15,
-    zIndex: 1,
-  },
-  input: {
-    flex: 1,
-    height: 50,
+  countryCode: {
+    padding: 16,
     borderWidth: 1,
-    borderRadius: 10,
-    paddingLeft: 45,
-    paddingRight: 45,
+    borderRightWidth: 0,
+    borderTopLeftRadius: 12,
+    borderBottomLeftRadius: 12,
+    justifyContent: 'center',
+    backgroundColor: '#f8f9fa',
+  },
+  countryCodeText: {
+    fontSize: 16,
+    fontWeight: '500',
+  },
+  phoneInput: {
+    flex: 1,
+    padding: 16,
+    borderWidth: 1,
+    borderTopRightRadius: 12,
+    borderBottomRightRadius: 12,
     fontSize: 16,
   },
-  eyeIcon: {
-    position: 'absolute',
-    right: 15,
-  },
-  loginButton: {
-    height: 50,
-    borderRadius: 10,
-    justifyContent: 'center',
+  continueButton: {
+    padding: 16,
+    borderRadius: 12,
     alignItems: 'center',
-    marginTop: 10,
+    marginBottom: 24,
   },
-  buttonText: {
-    color: '#fff',
+  continueButtonText: {
+    color: 'white',
     fontSize: 16,
     fontWeight: '600',
   },
   dividerContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginVertical: 20,
+    marginVertical: 24,
   },
   divider: {
     flex: 1,
     height: 1,
   },
   dividerText: {
-    marginHorizontal: 10,
+    marginHorizontal: 12,
     fontSize: 14,
   },
   guestButton: {
-    height: 50,
-    borderRadius: 10,
-    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 12,
     alignItems: 'center',
     borderWidth: 1,
-    marginBottom: 20,
+    marginBottom: 24,
   },
   guestButtonText: {
     fontSize: 16,
     fontWeight: '600',
   },
   footer: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    marginBottom: 30,
+    marginTop: 'auto',
+    paddingTop: 16,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(0,0,0,0.1)',
   },
   footerText: {
-    fontSize: 14,
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 18,
   },
-  signUpText: {
-    fontSize: 14,
+  linkText: {
     fontWeight: '600',
   },
 });

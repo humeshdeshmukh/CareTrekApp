@@ -24,7 +24,7 @@ const RoleSelectionScreen = ({ navigation }: { navigation: RoleSelectionScreenNa
   const handleRoleSelect = (role: 'senior' | 'family') => {
     console.log(`Selected role: ${role}`);
     if (role === 'senior') {
-      // Navigate directly to Senior Dashboard
+      // Navigate directly to the SeniorDashboard (HomeScreen)
       navigation.navigate('SeniorDashboard');
     } else {
       // Navigate to Family Dashboard for family members
