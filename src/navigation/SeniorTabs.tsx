@@ -10,7 +10,6 @@ import HomeScreen from '../screens/Senior/HomeScreen';
 import MapScreen from '../screens/Senior/MapScreen';
 import HealthScreen from '../screens/Senior/HealthScreen';
 import RemindersScreen from '../screens/Senior/RemindersScreen';
-import MoreScreen from '../screens/Senior/MoreScreen';
 
 const Tab = createBottomTabNavigator<SeniorTabParamList>();
 
@@ -38,9 +37,6 @@ export const SeniorTabs = () => {
             case 'Reminders':
               iconName = focused ? 'alarm' : 'alarm-outline';
               break;
-            case 'More':
-              iconName = focused ? 'menu' : 'menu-outline';
-              break;
           }
 
           return <Ionicons name={iconName} size={size} color={color} />;
@@ -66,7 +62,6 @@ export const SeniorTabs = () => {
         component={RemindersScreen} 
         options={{ title: 'Reminders' }} 
       />
-      <Tab.Screen name="More" component={MoreScreen} options={{ title: 'More' }} />
     </Tab.Navigator>
   );
 };

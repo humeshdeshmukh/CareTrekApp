@@ -14,8 +14,19 @@ import HealthScreen from '../screens/Senior/HealthScreen';
 import MapScreen from '../screens/Senior/MapScreen';
 import RemindersScreen from '../screens/Senior/RemindersScreen';
 import IdShareScreen from '../screens/Senior/IdShareScreen';
-import FamilyDashboard from '../screens/family/FamilyDashboard';
-import ConnectSeniorScreen from '../screens/family/ConnectSeniorScreen';
+
+// Import family screens
+import HomeScreenFamily from '../screens/family/HomeScreenFamily';
+import NewConnectSeniorScreen from '../screens/family/NewConnectSeniorScreen';
+import SeniorDetailScreen from '../screens/family/SeniorDetailScreen';
+import AlertsScreen from '../screens/family/AlertsScreen';
+import MessagesScreen from '../screens/family/MessagesScreen';
+import FamilySettingsScreen from '../screens/family/FamilySettingsScreen';
+import SeniorsListScreen from '../screens/family/SeniorsListScreen';
+
+// Import navigators
+import FamilyNavigator from './FamilyNavigator';
+import { SeniorTabs } from './SeniorTabs';
 
 export type RootStackParamList = {
   // Initial flow
@@ -24,16 +35,15 @@ export type RootStackParamList = {
   Onboarding: undefined;
   RoleSelection: undefined;
   
-  // Senior Screens
-  SeniorDashboard: undefined;
-  Health: undefined;
-  Reminders: undefined;
-  Map: undefined;
-  IdShare: undefined;
+  // Main App
+  Main: undefined;
   
-  // Family Screens
-  FamilyDashboard: undefined;
-  ConnectSenior: undefined;
+  // Senior Stack
+  SeniorTabs: undefined;
+  
+  // Family Stack
+  FamilyNavigator: undefined;
+  HomeScreenFamily: undefined;
   
   // Shared Screens
   HealthHistory: { seniorId?: string };
@@ -45,28 +55,29 @@ export type RootStackParamList = {
   AddSenior: undefined;
   ScanQRCode: undefined;
   AddFamilyMember: undefined;
+  ConnectSenior: undefined;
+  
+  // Family Screens
+  SeniorDetail: { seniorId: string };
+  SeniorsList: undefined;
+  Alerts: undefined;
+  FamilySettings: undefined;
+  
+  // Add index signature for dynamic routes
+  [key: string]: undefined | object;
 };
 
 const Stack = createStackNavigator<RootStackParamList>();
 
 const RootNavigator = () => {
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
 
   return (
     <Stack.Navigator
       initialRouteName="Welcome"
       screenOptions={{
         headerShown: false,
-        cardStyle: { backgroundColor: colors.background },
-        gestureEnabled: true,
-        cardOverlayEnabled: true,
-        headerStyle: {
-          backgroundColor: colors.card,
-        },
-        headerTintColor: colors.text,
-        headerTitleStyle: {
-          color: colors.text,
-        },
+        cardStyle: { backgroundColor: isDark ? '#1A202C' : '#FFFFFF' },
       }}
     >
       {/* Initial Flow */}
@@ -75,38 +86,130 @@ const RootNavigator = () => {
       <Stack.Screen name="Onboarding" component={OnboardingScreen} />
       <Stack.Screen name="RoleSelection" component={RoleSelectionScreen} />
       
-      {/* Senior Screens */}
-      <Stack.Screen name="SeniorDashboard" component={SeniorDashboard} />
+      {/* Main App Tabs */}
       <Stack.Screen 
-        name="Health" 
-        component={HealthScreen} 
-        options={{ title: 'Health Metrics' }}
-      />
-      <Stack.Screen 
-        name="Reminders" 
-        component={RemindersScreen} 
-        options={{ title: 'My Reminders' }}
-      />
-      <Stack.Screen 
-        name="Map" 
-        component={MapScreen} 
-        options={{ title: 'My Location' }}
-      />
-      <Stack.Screen 
-        name="IdShare" 
-        component={IdShareScreen} 
-        options={{ title: 'Share My ID' }}
+        name="SeniorTabs" 
+        component={SeniorTabs}
+        options={{ gestureEnabled: false }}
       />
       
-      {/* Family Screens */}
-      <Stack.Screen name="FamilyDashboard" component={FamilyDashboard} />
+      {/* Family Navigator */}
+      <Stack.Screen 
+        name="FamilyNavigator" 
+        component={FamilyNavigator}
+        options={{ headerShown: false }}
+      />
+      
+      {/* Health History Screen */}
+      <Stack.Screen 
+        name="HealthHistory" 
+        component={require('../screens/family/HealthHistoryScreen').default}
+        options={{ 
+          title: 'Health History',
+          headerShown: true,
+          headerStyle: {
+            backgroundColor: isDark ? '#1A202C' : '#FFFFFF',
+            elevation: 0,
+            shadowOpacity: 0,
+            borderBottomWidth: 0,
+          },
+          headerTintColor: isDark ? '#E2E8F0' : '#1A202C',
+          headerTitleStyle: {
+            fontWeight: '600',
+          },
+        }}
+      />
+      
+      {/* Settings Screen */}
+      <Stack.Screen 
+        name="Settings" 
+        component={require('../screens/family/FamilySettingsScreen').default}
+        options={{ 
+          title: 'Settings',
+          headerShown: true,
+          headerStyle: {
+            backgroundColor: isDark ? '#1A202C' : '#FFFFFF',
+            elevation: 0,
+            shadowOpacity: 0,
+            borderBottomWidth: 0,
+          },
+          headerTintColor: isDark ? '#E2E8F0' : '#1A202C',
+          headerTitleStyle: {
+            fontWeight: '600',
+          },
+        }}
+      />
+      
+      {/* Individual Family Screens - These can be navigated to directly */}
+      <Stack.Screen 
+        name="HomeScreenFamily" 
+        component={HomeScreenFamily} 
+        options={{ headerShown: false }}
+      />
+      
       <Stack.Screen 
         name="ConnectSenior" 
-        component={ConnectSeniorScreen}
+        component={NewConnectSeniorScreen}
         options={{
-          title: 'Connect to Senior',
           headerShown: true,
+          title: 'Connect Senior'
+        }}
+      />
+      
+      <Stack.Screen 
+        name="SeniorDetail" 
+        component={SeniorDetailScreen}
+        options={{
+          headerShown: true,
+          title: 'Senior Details'
+        }}
+      />
+      
+      <Stack.Screen 
+        name="Alerts" 
+        component={AlertsScreen}
+        options={{
+          headerShown: true,
+          title: 'Alerts'
+        }}
+      />
+      
+      <Stack.Screen 
+        name="Messages" 
+        component={MessagesScreen}
+        options={{
+          headerShown: true,
+          title: 'Messages'
+        }}
+      />
+      
+      <Stack.Screen 
+        name="FamilySettings" 
+        component={FamilySettingsScreen}
+        options={{
+          headerShown: true,
+          title: 'Settings'
+        }}
+      />
+      
+      <Stack.Screen 
+        name="TrackSenior" 
+        component={MapScreen} // Using MapScreen for tracking
+        options={{
+          headerShown: true,
+          title: 'Track Senior',
           headerBackTitle: 'Back',
+          headerTintColor: isDark ? '#FFFFFF' : '#2D3748',
+          headerStyle: {
+            backgroundColor: isDark ? '#1A202C' : '#FFFFFF',
+            elevation: 0,
+            shadowOpacity: 0,
+            borderBottomWidth: 0,
+          },
+          headerTitleStyle: {
+            fontWeight: '600',
+            color: isDark ? '#FFFFFF' : '#2D3748',
+          },
         }}
       />
     </Stack.Navigator>

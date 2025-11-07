@@ -69,32 +69,27 @@ const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const systemColorScheme = useColorScheme();
-  const [themeMode, setThemeMode] = useState<ThemeMode>('system');
-  
-  const isDark = themeMode === 'system' 
+  const [theme, setTheme] = useState<ThemeMode>('system');
+
+  const isDarkMode = theme === 'system' 
     ? systemColorScheme === 'dark' 
-    : themeMode === 'dark';
+    : theme === 'dark';
 
-  const colors = isDark ? DARK_THEME : LIGHT_THEME;
-
-  const setTheme = (mode: ThemeMode) => {
-    setThemeMode(mode);
-  };
+  const colors = isDarkMode ? { ...DARK_THEME, isDark: true } : { ...LIGHT_THEME, isDark: false };
 
   const toggleTheme = () => {
-    setTheme(themeMode === 'light' ? 'dark' : 'light');
-  };
-
-  const value = {
-    theme: themeMode,
-    isDark,
-    colors,
-    setTheme,
-    toggleTheme,
+    setTheme(prev => prev === 'light' ? 'dark' : 'light');
   };
 
   return (
-    <ThemeContext.Provider value={value}>
+    <ThemeContext.Provider
+      value={{
+        theme,
+        isDark: isDarkMode,
+        colors,
+        setTheme,
+        toggleTheme,
+      }}>
       {children}
     </ThemeContext.Provider>
   );
