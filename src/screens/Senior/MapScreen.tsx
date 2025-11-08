@@ -1,5 +1,4 @@
-// MapScreen.tsx  (improved: share + sos + cleaned UI + fixed bugs)
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -13,25 +12,21 @@ import {
   Share,
   Linking,
   SafeAreaView as RNFSafeAreaView,
+  PermissionsAndroid,
+  NativeModules
 } from 'react-native';
-import MapView, { Marker, Circle, Region, MapType } from 'react-native-maps';
+import * as Location from 'expo-location';
+import MapView, { Marker, Circle, Region, MapType, Polyline } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { RootStackParamList } from '../../navigation/RootNavigator';
 import { useTheme } from '../../contexts/theme/ThemeContext';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from '../../contexts/translation/TranslationContext';
 import { useCachedTranslation } from '../../hooks/useCachedTranslation';
 import Slider from '@react-native-community/slider';
-import { v4 as uuidv4 } from 'uuid';
-
-let Battery: any = null;
-try {
-  Battery = require('expo-battery');
-} catch (e) {
-  Battery = null;
-}
 
 const { width, height } = Dimensions.get('window');
 
@@ -49,6 +44,13 @@ type SafeZone = {
   latitude: number;
   longitude: number;
   radius: number;
+};
+
+const STORAGE_KEYS = {
+  FAVORITES: '@map_favorites_v1',
+  SAFE_ZONES: '@map_safezones_v1',
+  HISTORY: '@map_history_v1',
+  HOME: '@map_home_v1',
 };
 
 const DEFAULT_REGION: Region = {
@@ -75,12 +77,9 @@ const MapScreen: React.FC = () => {
   const [mapType, setMapType] = useState<MapType>('standard');
   const [showTraffic, setShowTraffic] = useState<boolean>(false);
 
-  // Sharing
+  // Sharing (simplified: one-shot share)
   const [isSharingLive, setIsSharingLive] = useState(false);
-  const [shareDuration, setShareDuration] = useState<number>(60 * 60 * 1000); // 1 hour
   const [shareModalVisible, setShareModalVisible] = useState(false);
-  const shareIntervalRef = useRef<number | null>(null);
-  const activeShareIdRef = useRef<string | null>(null);
 
   // Location + history
   const [currentLocation, setCurrentLocation] = useState<LocationPoint>({
@@ -88,6 +87,7 @@ const MapScreen: React.FC = () => {
     longitude: DEFAULT_REGION.longitude,
     timestamp: Date.now(),
   });
+  const [currentAddress, setCurrentAddress] = useState<string>('');
   const [locationHistory, setLocationHistory] = useState<LocationPoint[]>([]);
   const [historyPlaybackIndex, setHistoryPlaybackIndex] = useState<number>(0);
   const [isPlayingHistory, setIsPlayingHistory] = useState(false);
@@ -95,240 +95,247 @@ const MapScreen: React.FC = () => {
   // history UI
   const [historyExpanded, setHistoryExpanded] = useState(false);
 
-  // Safezones, favorites
+  // Safezones, favorites, home
   const [safeZones, setSafeZones] = useState<SafeZone[]>([]);
   const [tempZoneCoords, setTempZoneCoords] = useState<{ latitude: number; longitude: number } | null>(null);
   const [newZoneModalVisible, setNewZoneModalVisible] = useState(false);
   const [newZoneTitle, setNewZoneTitle] = useState('');
   const [newZoneRadius, setNewZoneRadius] = useState<number>(100);
   const [favorites, setFavorites] = useState<LocationPoint[]>([]);
+  const [favoritesModalVisible, setFavoritesModalVisible] = useState(false);
+  const [homeLocation, setHomeLocation] = useState<LocationPoint | null>(null);
+  const [homeAddress, setHomeAddress] = useState<string>('');
 
-  // extras
-  const [batteryLevel, setBatteryLevel] = useState<number | null>(null);
-  const [weatherText, setWeatherText] = useState<string | null>(null);
+  // Search
+  const [searchModalVisible, setSearchModalVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Turn-by-turn (in-app)
+  const [routeCoords, setRouteCoords] = useState<Array<{ latitude: number; longitude: number }>>([]);
+  const [routeSteps, setRouteSteps] = useState<Array<{ instruction: string; lat: number; lng: number }>>([]);
+  const navAnimRef = useRef<number | null>(null);
+  const navIndexRef = useRef<number>(0);
+
+  // Request location permission for both Android and iOS
+  const requestLocationPermission = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        console.log('Location permission granted');
+        return true;
+      } else {
+        console.log('Location permission denied');
+        Alert.alert(
+          'Permission Denied',
+          'Location permission is needed to show your position on the map. You can enable it in app settings.',
+          [
+            {
+              text: 'Open Settings',
+              onPress: () => Linking.openSettings()
+            },
+            { text: 'Cancel', style: 'cancel' }
+          ]
+        );
+        return false;
+      }
+    } catch (err) {
+      console.warn('Error requesting location permission:', err);
+      return false;
+    }
+  };
+
+  // Get current location
+  const getCurrentLocation = async () => {
+    console.log('Getting current location...');
+    
+    try {
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.High,
+        timeInterval: 5000,
+        distanceInterval: 5,
+      });
+      
+      console.log('Got position:', location);
+      const { latitude, longitude, accuracy } = location.coords;
+      
+      // Only update if we have valid coordinates
+      if (latitude && longitude) {
+        const newLocation = {
+          latitude,
+          longitude,
+          timestamp: Date.now(),
+        };
+        
+        console.log('New location:', newLocation);
+        setCurrentLocation(newLocation);
+        setLocationHistory((prev) => [...prev.slice(-199), newLocation]);
+        checkSafeZones(newLocation);
+        
+        // Center map on current location
+        if (mapRef.current) {
+          mapRef.current.animateToRegion({
+            latitude,
+            longitude,
+            latitudeDelta: 0.01,
+            longitudeDelta: 0.01,
+          }, 350);
+        }
+        
+        return newLocation;
+      }
+    } catch (error: any) {
+      console.warn('Error getting location:', error);
+      let errorMessage = 'Unable to get your current location.';
+      
+      if (error?.code === 'E_LOCATION_UNAUTHORIZED') {
+        errorMessage = 'Location permission was denied. Please enable it in app settings.';
+      } else if (error?.code === 'E_LOCATION_UNAVAILABLE') {
+        errorMessage = 'Location information is unavailable. Please check your device settings.';
+      } else if (error?.code === 'E_LOCATION_TIMEOUT') {
+        errorMessage = 'Location request timed out. Please try again.';
+      }
+      
+      Alert.alert('Location Error', errorMessage, [
+        { text: 'Open Settings', onPress: () => Linking.openSettings() },
+        { text: 'OK' }
+      ]);
+    }
+    return null;
+  };
+
+  // Watch position for updates
+  const watchPosition = () => {
+    let subscription: Location.LocationSubscription | null = null;
+    
+    Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.High,
+        distanceInterval: 10, // Update every 10 meters
+        timeInterval: 5000,   // Update every 5 seconds
+      },
+      (location) => {
+        const { latitude, longitude } = location.coords;
+        const newLocation = {
+          latitude,
+          longitude,
+          timestamp: Date.now(),
+        };
+        setCurrentLocation(newLocation);
+        setLocationHistory((prev) => [...prev.slice(-199), newLocation]);
+        checkSafeZones(newLocation);
+      }
+    ).then(sub => {
+      subscription = sub;
+    }).catch(error => {
+      console.warn('Error watching location:', error);
+    });
+    
+    // Return cleanup function
+    return () => {
+      if (subscription) {
+        subscription.remove();
+      }
+    };
+  };
+
+  // Initialize location services
+  const initLocation = async () => {
+    try {
+      const hasPermission = await requestLocationPermission();
+      if (hasPermission) {
+        // Get initial location
+        await getCurrentLocation();
+        
+        // Start watching position for updates
+        const cleanupWatch = watchPosition();
+        
+        // Return cleanup function
+        return () => {
+          if (cleanupWatch) {
+            cleanupWatch();
+          }
+        };
+      }
+    } catch (error) {
+      console.warn('Error initializing location:', error);
+      Alert.alert('Location Error', 'Failed to initialize location services');
+    }
+  };
 
   // ---------- lifecycle ----------
   useEffect(() => {
-    loadPersistedData();
-
-    if (Battery && Battery.getBatteryLevelAsync) {
-      Battery.getBatteryLevelAsync().then((lvl: number) => setBatteryLevel(lvl));
-    }
-
-    // simulate location updates (replace with real location watcher)
-    const sim = setInterval(simulateLocationMovement, 5000);
+    (async () => {
+      await loadPersistedData();
+      await initLocation();
+    })();
 
     return () => {
-      clearInterval(sim);
-      stopLiveShareInterval();
+      stopNavAnimation();
     };
   }, []);
 
-  // playback effect
+  // persist favorites/safezones/history/home when changed
+  useEffect(() => { AsyncStorage.setItem(STORAGE_KEYS.FAVORITES, JSON.stringify(favorites)).catch(() => {}); }, [favorites]);
+  useEffect(() => { AsyncStorage.setItem(STORAGE_KEYS.SAFE_ZONES, JSON.stringify(safeZones)).catch(() => {}); }, [safeZones]);
+  useEffect(() => { AsyncStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(locationHistory)).catch(() => {}); }, [locationHistory]);
+  useEffect(() => { AsyncStorage.setItem(STORAGE_KEYS.HOME, JSON.stringify(homeLocation)).catch(() => {}); }, [homeLocation]);
+
+  // update address when currentLocation changes
   useEffect(() => {
-    let playTimer: any = null;
-    if (isPlayingHistory && locationHistory.length > 0) {
-      playTimer = setInterval(() => {
-        setHistoryPlaybackIndex((prev) => {
-          const next = Math.min(prev + 1, locationHistory.length - 1);
-          const p = locationHistory[next];
-          if (p) {
-            mapRef.current?.animateToRegion({
-              latitude: p.latitude,
-              longitude: p.longitude,
-              latitudeDelta: 0.01,
-              longitudeDelta: 0.01,
-            }, 400);
-          }
-          if (next >= locationHistory.length - 1) {
-            clearInterval(playTimer);
-            setIsPlayingHistory(false);
-          }
-          return next;
-        });
-      }, 1000);
-    }
-    return () => {
-      if (playTimer) clearInterval(playTimer);
+    let mounted = true;
+    const fetch = async () => {
+      try {
+        const addr = await reverseGeocode(currentLocation.latitude, currentLocation.longitude);
+        if (mounted) setCurrentAddress(addr);
+      } catch (e) {
+        console.warn('Reverse geocode failed', e);
+      }
     };
-  }, [isPlayingHistory, locationHistory]);
+    fetch();
+    return () => { mounted = false; };
+  }, [currentLocation]);
 
   // ---------- helpers ----------
   const loadPersistedData = async () => {
-    // demo history (replace with your persisted storage)
-    const demoHistory: LocationPoint[] = [
-      { latitude: 37.78825, longitude: -122.4324, timestamp: Date.now() - 1800_000 },
-      { latitude: 37.78925, longitude: -122.4334, timestamp: Date.now() - 1200_000 },
-      { latitude: 37.79025, longitude: -122.4344, timestamp: Date.now() - 600_000 },
-      { latitude: 37.79125, longitude: -122.4354, timestamp: Date.now() },
-    ];
-    setLocationHistory(demoHistory);
+    try {
+      const favRaw = await AsyncStorage.getItem(STORAGE_KEYS.FAVORITES);
+      const szRaw = await AsyncStorage.getItem(STORAGE_KEYS.SAFE_ZONES);
+      const histRaw = await AsyncStorage.getItem(STORAGE_KEYS.HISTORY);
+      const homeRaw = await AsyncStorage.getItem(STORAGE_KEYS.HOME);
+      if (favRaw) setFavorites(JSON.parse(favRaw));
+      if (szRaw) setSafeZones(JSON.parse(szRaw));
+      if (histRaw) setLocationHistory(JSON.parse(histRaw));
+      if (homeRaw) {
+        const h = JSON.parse(homeRaw);
+        setHomeLocation(h);
+        if (h) reverseGeocode(h.latitude, h.longitude).then(a => setHomeAddress(a)).catch(() => {});
+      }
+    } catch (e) {
+      console.warn('Load persisted failed', e);
+    }
+
+    // if no history, seed demo
+    if (!locationHistory || locationHistory.length === 0) {
+      const demoHistory: LocationPoint[] = [
+        { latitude: 37.78825, longitude: -122.4324, timestamp: Date.now() - 1800_000 },
+        { latitude: 37.78925, longitude: -122.4334, timestamp: Date.now() - 1200_000 },
+        { latitude: 37.79025, longitude: -122.4344, timestamp: Date.now() - 600_000 },
+        { latitude: 37.79125, longitude: -122.4354, timestamp: Date.now() },
+      ];
+      setLocationHistory(demoHistory);
+    }
   };
 
-  const simulateLocationMovement = () => {
-    setCurrentLocation((prev) => {
-      const next = {
-        latitude: prev.latitude + (Math.random() - 0.5) * 0.0006,
-        longitude: prev.longitude + (Math.random() - 0.5) * 0.0006,
-        timestamp: Date.now(),
-      };
-      setLocationHistory((h) => {
-        const arr = [...h, next];
-        // keep limited history
-        return arr.slice(-200);
-      });
-      checkSafeZones(next);
-      // if live sharing is active, push update immediately (also interval will push)
-      if (isSharingLive) sendShareUpdate(next);
-      return next;
-    });
+  // Refresh location button handler
+  const handleRefreshLocation = () => {
+    getCurrentLocation();
   };
 
   const checkSafeZones = (loc: LocationPoint) => {
     safeZones.forEach((z) => {
       const distance = haversineDistance(z.latitude, z.longitude, loc.latitude, loc.longitude);
-      if (distance <= z.radius) {
-        // TODO: notify user or send enter event
-        console.log(`[zone] inside ${z.title}`);
-      }
+      if (distance <= z.radius) console.log(`[zone] inside ${z.title}`);
     });
-  };
-
-  const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
-    const R = 6371000;
-    const toRad = (d: number) => (d * Math.PI) / 180;
-    const dLat = toRad(lat2 - lat1);
-    const dLon = toRad(lon2 - lon1);
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-      Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  };
-
-  // ---------- Share (live) functionality ----------
-  const openShareModal = () => setShareModalVisible(true);
-  const closeShareModal = () => setShareModalVisible(false);
-
-  const startLiveShare = async () => {
-    // generate id + create session (call API here)
-    const shareId = uuidv4();
-    activeShareIdRef.current = shareId;
-    setIsSharingLive(true);
-    setShareModalVisible(false);
-
-    // start interval to push location
-    stopLiveShareInterval();
-    // @ts-ignore - window.setInterval returns number in RN env
-    shareIntervalRef.current = setInterval(() => {
-      sendShareUpdate(currentLocation);
-    }, 5000) as unknown as number;
-
-    // create share link and open share sheet
-    const shareLink = `https://example.com/share/${shareId}`; // replace with your own share URL
-    try {
-      await Share.share({
-        message: `I'm sharing my live location: ${shareLink}`,
-        title: 'Live location share',
-      });
-    } catch (e) {
-      console.warn('Share failed', e);
-    }
-
-    console.log('[share] started', shareId);
-    // Optionally set a timeout to auto-stop after shareDuration
-    if (shareDuration > 0) {
-      setTimeout(() => {
-        stopLiveShare();
-      }, shareDuration);
-    }
-  };
-
-  const sendShareUpdate = async (loc: LocationPoint) => {
-    // TODO: replace this with your API call (e.g., POST /share/:id/locations)
-    // send activeShareIdRef.current + loc
-    const sid = activeShareIdRef.current;
-    if (!sid) return;
-    console.log(`[share:${sid}] update sent:`, loc);
-    // Example:
-    // await fetch(`${API_BASE}/share/${sid}/location`, { method: 'POST', body: JSON.stringify(loc) })
-  };
-
-  const stopLiveShareInterval = () => {
-    if (shareIntervalRef.current) {
-      clearInterval(shareIntervalRef.current as any);
-      shareIntervalRef.current = null;
-    }
-  };
-
-  const stopLiveShare = async () => {
-    // call API to close session if needed
-    stopLiveShareInterval();
-    console.log('[share] stopped', activeShareIdRef.current);
-    activeShareIdRef.current = null;
-    setIsSharingLive(false);
-  };
-
-  // ---------- SOS ----------
-  const triggerSOS = async () => {
-    const locText = `My location: ${currentLocation.latitude.toFixed(6)}, ${currentLocation.longitude.toFixed(6)} (https://www.google.com/maps/search/?api=1&query=${currentLocation.latitude},${currentLocation.longitude})`;
-    const message = `SOS! I need help. ${locText}`;
-
-    // Try SMS composer (Android/iOS) — fallback to share sheet
-    const phone = ''; // optionally preset emergency phone numbers or fetch from user settings
-    try {
-      if (Platform.OS === 'ios') {
-        // open sms: with body param
-        const url = `sms:${phone}?body=${encodeURIComponent(message)}`;
-        const supported = await Linking.canOpenURL(url);
-        if (supported) {
-          await Linking.openURL(url);
-          return;
-        }
-      } else {
-        // android
-        const url = `sms:${phone}?body=${encodeURIComponent(message)}`;
-        const supported = await Linking.canOpenURL(url);
-        if (supported) {
-          await Linking.openURL(url);
-          return;
-        }
-      }
-    } catch (e) {
-      console.warn('SMS open failed', e);
-    }
-
-    // fallback: share sheet so user can pick SMS/WhatsApp/Email
-    try {
-      await Share.share({
-        message,
-        title: 'SOS — Help',
-      });
-    } catch (e) {
-      console.warn('Share failed', e);
-      Alert.alert('SOS', 'Unable to open sharing options — please call your emergency contacts.');
-    }
-
-    // stub: call backend to notify emergency contacts
-    console.log('[SOS] sent', currentLocation);
-    Alert.alert('SOS', 'SOS message prepared. Please complete the send in your messaging app.');
-  };
-
-  // ---------- UI actions ----------
-  const centerOnUser = () => {
-    mapRef.current?.animateToRegion({
-      latitude: currentLocation.latitude,
-      longitude: currentLocation.longitude,
-      latitudeDelta: 0.01,
-      longitudeDelta: 0.01,
-    }, 350);
-  };
-
-  const saveFavorite = (loc?: LocationPoint) => {
-    const p = loc ?? currentLocation;
-    setFavorites((f) => [...f, p]);
-    Alert.alert('Saved', 'Favorite saved');
   };
 
   const confirmAddSafeZone = () => {
@@ -351,29 +358,171 @@ const MapScreen: React.FC = () => {
     Alert.alert('Zone added', newZone.title);
   };
 
-  const handleMapLongPress = (e: any) => {
-    const coords = e.nativeEvent.coordinate;
-    setTempZoneCoords(coords);
-    setNewZoneModalVisible(true);
+  const haversineDistance = (lat1: number, lon1: number, lat2: number, lon2: number) => {
+    const R = 6371000;
+    const toRad = (d: number) => (d * Math.PI) / 180;
+    const dLat = toRad(lat2 - lat1);
+    const dLon = toRad(lon2 - lon1);
+    const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    return R * c;
   };
 
-  // history controls
-  const togglePlayPause = () => {
-    setIsPlayingHistory((p) => {
-      const next = !p;
-      if (next && locationHistory.length > 0) {
-        // ensure expanded for visibility
-        setHistoryExpanded(true);
+  // ---------- Reverse geocoding (Nominatim) ----------
+  const reverseGeocode = async (lat: number, lon: number) => {
+    try {
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`;
+      const res = await fetch(url, { headers: { 'User-Agent': 'CareTrek/1.0 (contact: none)' } });
+      if (!res.ok) throw new Error('geocode failed');
+      const json = await res.json();
+      return json.display_name || `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+    } catch (e) {
+      console.warn('Reverse geocode error', e);
+      return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+    }
+  };
+
+  // ---------- Share (simple one-shot share with address) ----------
+  const openShareModal = () => setShareModalVisible(true);
+  const closeShareModal = () => setShareModalVisible(false);
+
+  const startLiveShare = async () => {
+    setIsSharingLive(true);
+    setShareModalVisible(false);
+
+    // get address for current location
+    const addr = await reverseGeocode(currentLocation.latitude, currentLocation.longitude);
+    const locText = `${addr} (lat:${currentLocation.latitude.toFixed(6)}, lon:${currentLocation.longitude.toFixed(6)})`;
+    const message = `Current location: ${locText}`;
+
+    try {
+      await Share.share({ message, title: 'My location' });
+    } catch (e) {
+      console.warn('Share failed', e);
+      Alert.alert('Share', 'Unable to open share sheet.');
+    }
+
+    setIsSharingLive(false);
+  };
+
+  // ---------- Home (save current as home) ----------
+  const saveHome = async () => {
+    const p = currentLocation;
+    setHomeLocation(p);
+    const addr = await reverseGeocode(p.latitude, p.longitude);
+    setHomeAddress(addr);
+    Alert.alert('Home saved', addr);
+  };
+
+  const navigateHome = async () => {
+    if (!homeLocation) { Alert.alert('Home', 'No home saved.'); return; }
+    // use OSRM demo server for routing (open-source). If fails, fallback to straight line.
+    try {
+      const url = `https://router.project-osrm.org/route/v1/driving/${currentLocation.longitude},${currentLocation.latitude};${homeLocation.longitude},${homeLocation.latitude}?overview=full&geometries=geojson`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (json.routes && json.routes.length) {
+        const coords = json.routes[0].geometry.coordinates.map((c: any) => ({ latitude: c[1], longitude: c[0] }));
+        setRouteCoords(coords);
+        // simple step extraction from legs (if available)
+        const steps: Array<{ instruction: string; lat: number; lng: number }> = [];
+        (json.routes[0].legs || []).forEach((leg: any) => { (leg.steps || []).forEach((s: any) => { steps.push({ instruction: s.maneuver && s.maneuver.instruction ? s.maneuver.instruction : 'Proceed', lat: s.maneuver.location[1], lng: s.maneuver.location[0] }); }); });
+        setRouteSteps(steps);
+        startRouteAnimation(coords, steps);
+      } else {
+        startStraightLineNav(homeLocation.latitude, homeLocation.longitude);
       }
-      return next;
-    });
+    } catch (e) {
+      console.warn('OSRM failed', e);
+      startStraightLineNav(homeLocation.latitude, homeLocation.longitude);
+    }
   };
 
-  const clearHistory = () => {
-    Alert.alert('Confirm', 'Clear location history?', [
-      { text: 'Cancel', style: 'cancel' },
-      { text: 'Clear', style: 'destructive', onPress: () => { setLocationHistory([]); setHistoryPlaybackIndex(0); } },
-    ]);
+  // ---------- SOS ----------
+  const triggerSOS = async () => {
+    const addr = await reverseGeocode(currentLocation.latitude, currentLocation.longitude);
+    const locText = `${addr} (https://www.google.com/maps/search/?api=1&query=${currentLocation.latitude},${currentLocation.longitude})`;
+    const message = `SOS! Please help. My location: ${locText}`;
+
+    try {
+      await Share.share({ message, title: 'SOS — Help' });
+    } catch (e) {
+      console.warn('Share failed', e);
+      Alert.alert('SOS', 'Unable to open sharing options — please call your emergency contacts.');
+    }
+
+    Alert.alert('SOS', 'SOS message prepared. Please complete the send in your messaging app.');
+  };
+
+  // ---------- Navigation helpers (straight line + route animation) ----------
+  const startStraightLineNav = (destLat: number, destLng: number) => {
+    const steps = generateStraightLineSteps(currentLocation.latitude, currentLocation.longitude, destLat, destLng, 30);
+    const coords = steps.map(s => ({ latitude: s.lat, longitude: s.lon }));
+    setRouteCoords(coords);
+    const inst = coords.map((c, i) => ({ instruction: `Step ${i + 1}`, lat: c.latitude, lng: c.longitude }));
+    setRouteSteps(inst);
+    startRouteAnimation(coords, inst);
+  };
+
+  const generateStraightLineSteps = (lat1: number, lon1: number, lat2: number, lon2: number, segments = 10) => {
+    const out: Array<{ lat: number; lon: number }> = [];
+    for (let i = 0; i <= segments; i++) {
+      const t = i / segments; out.push({ lat: lat1 + (lat2 - lat1) * t, lon: lon1 + (lon2 - lon1) * t });
+    }
+    return out;
+  };
+
+  const startRouteAnimation = (coords: Array<{ latitude: number; longitude: number }>, steps: Array<{ instruction: string; lat: number; lng: number }>) => {
+    stopNavAnimation();
+    if (!coords || coords.length === 0) return;
+    navIndexRef.current = 0;
+    navAnimRef.current = setInterval(() => {
+      const idx = navIndexRef.current;
+      if (idx >= coords.length) { stopNavAnimation(); setRouteSteps([]); setRouteCoords([]); return; }
+      const c = coords[idx];
+      mapRef.current?.animateToRegion({ latitude: c.latitude, longitude: c.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 400);
+      navIndexRef.current = idx + 1;
+    }, 700) as unknown as number;
+  };
+
+  const stopNavAnimation = () => { if (navAnimRef.current) { clearInterval(navAnimRef.current as any); navAnimRef.current = null; navIndexRef.current = 0; } };
+
+  const startNavigationTo = async (lat: number, lng: number) => { // in-app route fetching (OSRM)
+    try {
+      const url = `https://router.project-osrm.org/route/v1/driving/${currentLocation.longitude},${currentLocation.latitude};${lng},${lat}?overview=full&geometries=geojson`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (json.routes && json.routes.length) {
+        const coords = json.routes[0].geometry.coordinates.map((c: any) => ({ latitude: c[1], longitude: c[0] }));
+        setRouteCoords(coords);
+        const steps: Array<{ instruction: string; lat: number; lng: number }> = [];
+        (json.routes[0].legs || []).forEach((leg: any) => { (leg.steps || []).forEach((s: any) => { steps.push({ instruction: s.maneuver && s.maneuver.instruction ? s.maneuver.instruction : 'Proceed', lat: s.maneuver.location[1], lng: s.maneuver.location[0] }); }); });
+        setRouteSteps(steps);
+        startRouteAnimation(coords, steps);
+      } else {
+        startStraightLineNav(lat, lng);
+      }
+    } catch (e) {
+      console.warn('OSRM failed', e);
+      startStraightLineNav(lat, lng);
+    }
+  };
+
+  // ---------- history controls ----------
+  const togglePlayPause = () => { setIsPlayingHistory((p) => { const next = !p; if (next && locationHistory.length > 0) setHistoryExpanded(true); return next; }); };
+  const clearHistory = () => { Alert.alert('Confirm', 'Clear location history?', [{ text: 'Cancel', style: 'cancel' }, { text: 'Clear', style: 'destructive', onPress: () => { setLocationHistory([]); setHistoryPlaybackIndex(0); } }, ]); };
+
+  // ---------- Search ----------
+  const openSearch = () => setSearchModalVisible(true);
+  const closeSearch = () => setSearchModalVisible(false);
+  const performSearchAndCenter = async () => {
+    const q = searchQuery.trim();
+    if (!q) return;
+    const parts = q.split(',').map((s) => s.trim());
+    if (parts.length === 2 && !isNaN(Number(parts[0])) && !isNaN(Number(parts[1]))) {
+      const lat = Number(parts[0]); const lng = Number(parts[1]); mapRef.current?.animateToRegion({ latitude: lat, longitude: lng, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 350); closeSearch(); return;
+    }
+    Alert.alert('Search', 'Please enter coordinates as `lat,lng` or ask me to wire a geocoding provider.');
   };
 
   // ---------- Render ----------
@@ -387,14 +536,16 @@ const MapScreen: React.FC = () => {
         </TouchableOpacity>
 
         <View style={styles.headerRight}>
+          <TouchableOpacity onPress={() => setFavoritesModalVisible(true)} style={styles.iconButton} accessibilityLabel="Open favorites">
+            <Ionicons name="star" size={20} color={isDark ? '#E2E8F0' : '#1A202C'} />
+          </TouchableOpacity>
+
           <TouchableOpacity onPress={() => setMapType((t) => (t === 'standard' ? 'satellite' : t === 'satellite' ? 'hybrid' : 'standard'))} style={styles.iconButton}>
             <Ionicons name="layers" size={20} color={isDark ? '#E2E8F0' : '#1A202C'} />
-            <Text style={styles.iconLabel}>Map</Text>
           </TouchableOpacity>
 
           <TouchableOpacity onPress={() => setShowTraffic((s) => !s)} style={styles.iconButton}>
             <Ionicons name="speedometer" size={20} color={showTraffic ? '#EF4444' : (isDark ? '#E2E8F0' : '#1A202C')} />
-            <Text style={styles.iconLabel}>Traffic</Text>
           </TouchableOpacity>
 
           <TouchableOpacity onPress={openShareModal} style={[styles.shareButton, { backgroundColor: isDark ? '#1F2937' : '#2F855A' }]}>
@@ -413,194 +564,143 @@ const MapScreen: React.FC = () => {
           showsUserLocation
           showsMyLocationButton
           followsUserLocation
-          onLongPress={handleMapLongPress}
+          onLongPress={(e) => { setTempZoneCoords(e.nativeEvent.coordinate); setNewZoneModalVisible(true); }}
           mapType={mapType}
           showsTraffic={showTraffic}
         >
-          <Marker
-            coordinate={{ latitude: currentLocation.latitude, longitude: currentLocation.longitude }}
-            title="You"
-            description={new Date(currentLocation.timestamp).toLocaleString()}
-          />
-          {locationHistory.map((p, i) => (
-            <Marker key={`hist-${i}`} coordinate={{ latitude: p.latitude, longitude: p.longitude }} opacity={0.5} />
-          ))}
-          {safeZones.map((z) => (
-            <Circle
-              key={z.id}
-              center={{ latitude: z.latitude, longitude: z.longitude }}
-              radius={z.radius}
-              strokeColor="rgba(34,139,34,0.6)"
-              fillColor="rgba(34,139,34,0.15)"
-            />
-          ))}
-          {favorites.map((f, idx) => (
-            <Marker key={`fav-${idx}`} coordinate={{ latitude: f.latitude, longitude: f.longitude }} pinColor="purple" />
-          ))}
+          <Marker coordinate={{ latitude: currentLocation.latitude, longitude: currentLocation.longitude }} title="You" description={currentAddress || new Date(currentLocation.timestamp).toLocaleString()} />
+
+          {homeLocation && (
+            <Marker coordinate={{ latitude: homeLocation.latitude, longitude: homeLocation.longitude }} title="Home" description={homeAddress} pinColor="green">
+            </Marker>
+          )}
+
+          {locationHistory.map((p, i) => (<Marker key={`hist-${i}`} coordinate={{ latitude: p.latitude, longitude: p.longitude }} opacity={0.5} />))}
+          {safeZones.map((z) => (<Circle key={z.id} center={{ latitude: z.latitude, longitude: z.longitude }} radius={z.radius} strokeColor="rgba(34,139,34,0.6)" fillColor="rgba(34,139,34,0.15)" />))}
+          {favorites.map((f, idx) => (<Marker key={`fav-${idx}`} coordinate={{ latitude: f.latitude, longitude: f.longitude }} pinColor="purple" />))}
           {tempZoneCoords && <Marker coordinate={tempZoneCoords} pinColor="orange" />}
+
+          {/* route polyline */}
+          {routeCoords && routeCoords.length > 0 && (
+            <Polyline coordinates={routeCoords} strokeWidth={4} lineDashPattern={[1]} />
+          )}
         </MapView>
       </View>
 
-      {/* Footer (lowest panel) */}
+      {/* Footer (bottom panel) - search icon added, favorites removed from footer */}
       <View style={[styles.footer, { backgroundColor: isDark ? '#0B1220' : '#FFFFFF' }]}>
         <View style={styles.locationInfo}>
           <Ionicons name="location" size={20} color={isDark ? '#63B3ED' : '#3182CE'} style={styles.locationIcon} />
           <View style={{ flex: 1 }}>
             <Text style={[styles.addressTitle, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>Current Location</Text>
-            <Text style={[styles.address, { color: isDark ? '#9AA6B2' : '#4A5568' }]}>
-              {currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}
-            </Text>
-            <Text style={[styles.smallText, { color: isDark ? '#9AA6B2' : '#718096' }]}>
-              {weatherText ?? 'Weather: —'}  •  Battery: {batteryLevel !== null ? `${Math.round(batteryLevel * 100)}%` : '—'}
-            </Text>
+            <Text style={[styles.address, { color: isDark ? '#9AA6B2' : '#4A5568' }]}>{currentLocation.latitude.toFixed(6)}, {currentLocation.longitude.toFixed(6)}</Text>
+            <Text style={[styles.smallText, { color: isDark ? '#9AA6B2' : '#718096' }]} numberOfLines={2}>{currentAddress || 'Address: —'}</Text>
           </View>
         </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <TouchableOpacity style={styles.footerButton} onPress={centerOnUser}>
-            <Ionicons name="locate" size={20} color="white" />
-          </TouchableOpacity>
+          <TouchableOpacity style={styles.footerButton} onPress={() => mapRef.current?.animateToRegion({ latitude: currentLocation.latitude, longitude: currentLocation.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 350)}><Ionicons name="locate" size={20} color="white" /></TouchableOpacity>
 
-          <TouchableOpacity style={[styles.footerButton, { backgroundColor: '#F97316' }]} onPress={() => saveFavorite()}>
-            <Ionicons name="star" size={20} color="white" />
-          </TouchableOpacity>
+          {/* Search button (new) */}
+          <TouchableOpacity style={[styles.footerButton, { backgroundColor: '#2563EB' }]} onPress={() => setSearchModalVisible(true)}><Ionicons name="search" size={20} color="white" /></TouchableOpacity>
 
-          <TouchableOpacity style={[styles.footerButton, { backgroundColor: isSharingLive ? '#E53E3E' : '#38A169' }]} onPress={() => (isSharingLive ? stopLiveShare() : openShareModal())}>
-            <Ionicons name="people" size={20} color="white" />
-          </TouchableOpacity>
+          <TouchableOpacity style={[styles.footerButton, { backgroundColor: '#2F855A' }]} onPress={saveHome}><Ionicons name="home" size={20} color="white" /></TouchableOpacity>
         </View>
       </View>
 
       {/* SOS Floating Button (right) */}
-      <TouchableOpacity style={styles.sosButton} onPress={triggerSOS} activeOpacity={0.8}>
-        <Ionicons name="warning" size={28} color="white" />
-        <Text style={styles.sosText}>{sosText ?? 'SOS'}</Text>
-      </TouchableOpacity>
+      <TouchableOpacity style={styles.sosButton} onPress={triggerSOS} activeOpacity={0.8}><Ionicons name="warning" size={28} color="white" /><Text style={styles.sosText}>{sosText ?? 'SOS'}</Text></TouchableOpacity>
 
       {/* Vertical history controls (right, above SOS) */}
       {!historyExpanded ? (
         <View style={[styles.verticalHistoryRight, { backgroundColor: isDark ? '#071127' : '#FFFFFF' }]}>
-          <TouchableOpacity style={styles.iconSquare} onPress={togglePlayPause} accessibilityLabel="PlayPause history">
-            <Ionicons name={isPlayingHistory ? 'pause' : 'play'} size={18} color="white" />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.iconSquare, { marginTop: 8 }]} onPress={clearHistory} accessibilityLabel="Clear history">
-            <Ionicons name="trash" size={16} color="white" />
-          </TouchableOpacity>
-
-          <TouchableOpacity style={[styles.iconSquare, { marginTop: 8 }]} onPress={() => setHistoryExpanded(true)} accessibilityLabel="Expand history">
-            <Ionicons name="chevron-up" size={18} color="white" />
-          </TouchableOpacity>
+          <TouchableOpacity style={styles.iconSquare} onPress={togglePlayPause} accessibilityLabel="PlayPause history"><Ionicons name={isPlayingHistory ? 'pause' : 'play'} size={18} color="white" /></TouchableOpacity>
+          <TouchableOpacity style={[styles.iconSquare, { marginTop: 8 }]} onPress={clearHistory} accessibilityLabel="Clear history"><Ionicons name="trash" size={16} color="white" /></TouchableOpacity>
+          <TouchableOpacity style={[styles.iconSquare, { marginTop: 8 }]} onPress={() => setHistoryExpanded(true)} accessibilityLabel="Expand history"><Ionicons name="chevron-up" size={18} color="white" /></TouchableOpacity>
         </View>
       ) : (
         <View style={[styles.historyPanelExpanded, { backgroundColor: isDark ? '#071127' : '#FFFFFF' }]}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
             <Text style={{ color: isDark ? '#E2E8F0' : '#111', fontWeight: '600' }}>Location History</Text>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <TouchableOpacity style={styles.smallAction} onPress={() => setHistoryExpanded(false)}>
-                <Ionicons name="chevron-down" size={18} color={isDark ? '#E2E8F0' : '#111'} />
-              </TouchableOpacity>
+              <TouchableOpacity style={styles.smallAction} onPress={() => setHistoryExpanded(false)}><Ionicons name="chevron-down" size={18} color={isDark ? '#E2E8F0' : '#111'} /></TouchableOpacity>
             </View>
           </View>
 
-          <Slider
-            style={{ width: Math.max(180, width - 220) }}
-            minimumValue={0}
-            maximumValue={Math.max(locationHistory.length - 1, 0)}
-            step={1}
-            value={Math.min(historyPlaybackIndex, Math.max(locationHistory.length - 1, 0))}
-            minimumTrackTintColor="#2563EB"
-            onValueChange={(v: number) => {
-              const vi = Math.round(v);
-              setHistoryPlaybackIndex(vi);
-              const p = locationHistory[vi];
-              if (p) {
-                mapRef.current?.animateToRegion({
-                  latitude: p.latitude,
-                  longitude: p.longitude,
-                  latitudeDelta: 0.01,
-                  longitudeDelta: 0.01,
-                }, 300);
-              }
-            }}
-            disabled={locationHistory.length === 0}
-          />
+          <Slider style={{ width: Math.max(180, width - 220) }} minimumValue={0} maximumValue={Math.max(locationHistory.length - 1, 0)} step={1} value={Math.min(historyPlaybackIndex, Math.max(locationHistory.length - 1, 0))} minimumTrackTintColor="#2563EB" onValueChange={(v: number) => { const vi = Math.round(v); setHistoryPlaybackIndex(vi); const p = locationHistory[vi]; if (p) { mapRef.current?.animateToRegion({ latitude: p.latitude, longitude: p.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 300); } }} disabled={locationHistory.length === 0} />
 
           <View style={{ flexDirection: 'row', marginTop: 8 }}>
-            <TouchableOpacity style={styles.playButton} onPress={togglePlayPause}>
-              <Ionicons name={isPlayingHistory ? 'pause' : 'play'} size={18} color="white" />
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.playButton, { marginLeft: 8 }]} onPress={clearHistory}>
-              <Ionicons name="trash" size={18} color="white" />
-            </TouchableOpacity>
+            <TouchableOpacity style={styles.playButton} onPress={togglePlayPause}><Ionicons name={isPlayingHistory ? 'pause' : 'play'} size={18} color="white" /></TouchableOpacity>
+            <TouchableOpacity style={[styles.playButton, { marginLeft: 8 }]} onPress={clearHistory}><Ionicons name="trash" size={18} color="white" /></TouchableOpacity>
           </View>
         </View>
       )}
 
-      {/* Share Modal */}
+      {/* Share Modal (simplified - one-shot share) */}
       <Modal visible={shareModalVisible} transparent animationType="slide" onRequestClose={closeShareModal}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: isDark ? '#0B1220' : '#FFF' }]}>
-            <Text style={[styles.modalTitle, { color: isDark ? '#E2E8F0' : '#111' }]}>Share live location</Text>
+        <View style={styles.modalOverlay}><View style={[styles.modalContent, { backgroundColor: isDark ? '#0B1220' : '#FFF' }]}>
+          <Text style={[styles.modalTitle, { color: isDark ? '#E2E8F0' : '#111' }]}>Share location</Text>
 
-            <View style={{ marginVertical: 12 }}>
-              <TouchableOpacity onPress={() => setShareDuration(60 * 60 * 1000)} style={shareDuration === 60 * 60 * 1000 ? styles.durationSelected : styles.durationOption}>
-                <Text>1 hour</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setShareDuration(3 * 60 * 60 * 1000)} style={shareDuration === 3 * 60 * 60 * 1000 ? styles.durationSelected : styles.durationOption}>
-                <Text>3 hours</Text>
-              </TouchableOpacity>
-              <TouchableOpacity onPress={() => setShareDuration(24 * 60 * 60 * 1000)} style={shareDuration === 24 * 60 * 60 * 1000 ? styles.durationSelected : styles.durationOption}>
-                <Text>24 hours</Text>
-              </TouchableOpacity>
-            </View>
+          <Text style={{ marginBottom: 12 }}>Share your current location (address + coordinates) with family.</Text>
 
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-              <TouchableOpacity style={styles.modalButtonCancel} onPress={closeShareModal}>
-                <Text>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalButtonPrimary} onPress={startLiveShare}>
-                <Text style={{ color: 'white' }}>{isSharingLive ? 'Updating' : 'Start'}</Text>
-              </TouchableOpacity>
-            </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <TouchableOpacity style={styles.modalButtonCancel} onPress={closeShareModal}><Text>Cancel</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.modalButtonPrimary} onPress={startLiveShare}><Text style={{ color: 'white' }}>Share</Text></TouchableOpacity>
           </View>
-        </View>
+        </View></View>
       </Modal>
 
       {/* Add Safe Zone Modal */}
       <Modal visible={newZoneModalVisible} transparent animationType="slide" onRequestClose={() => setNewZoneModalVisible(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={[styles.modalContent, { backgroundColor: isDark ? '#0B1220' : '#FFF' }]}>
-            <Text style={[styles.modalTitle, { color: isDark ? '#E2E8F0' : '#111' }]}>Add Safe Zone</Text>
+        <View style={styles.modalOverlay}><View style={[styles.modalContent, { backgroundColor: isDark ? '#0B1220' : '#FFF' }]}>
+          <Text style={[styles.modalTitle, { color: isDark ? '#E2E8F0' : '#111' }]}>Add Safe Zone</Text>
 
-            <TextInput
-              placeholder="Zone name"
-              value={newZoneTitle}
-              onChangeText={setNewZoneTitle}
-              style={[styles.input, { backgroundColor: isDark ? '#111827' : '#F7FAFC', color: isDark ? '#E2E8F0' : '#111' }]}
-              placeholderTextColor={isDark ? '#9CA3AF' : '#9CA3AF'}
-            />
+          <TextInput placeholder="Zone name" value={newZoneTitle} onChangeText={setNewZoneTitle} style={[styles.input, { backgroundColor: isDark ? '#111827' : '#F7FAFC', color: isDark ? '#E2E8F0' : '#111' }]} placeholderTextColor={isDark ? '#9CA3AF' : '#9CA3AF'} />
 
-            <Text style={{ marginBottom: 8 }}>{`Radius (meters): ${newZoneRadius}`}</Text>
-            <Slider
-              minimumValue={50}
-              maximumValue={1000}
-              step={10}
-              value={newZoneRadius}
-              onValueChange={(v) => setNewZoneRadius(Math.round(v))}
-            />
+          <Text style={{ marginBottom: 8 }}>{`Radius (meters): ${newZoneRadius}`}</Text>
+          <Slider minimumValue={50} maximumValue={1000} step={10} value={newZoneRadius} onValueChange={(v) => setNewZoneRadius(Math.round(v))} />
 
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
-              <TouchableOpacity style={styles.modalButtonCancel} onPress={() => { setNewZoneModalVisible(false); setTempZoneCoords(null); }}>
-                <Text>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.modalButtonPrimary} onPress={confirmAddSafeZone}>
-                <Text style={{ color: 'white' }}>Add Zone</Text>
-              </TouchableOpacity>
-            </View>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 12 }}>
+            <TouchableOpacity style={styles.modalButtonCancel} onPress={() => { setNewZoneModalVisible(false); setTempZoneCoords(null); }}><Text>Cancel</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.modalButtonPrimary} onPress={confirmAddSafeZone}><Text style={{ color: 'white' }}>Add Zone</Text></TouchableOpacity>
           </View>
-        </View>
+        </View></View>
       </Modal>
+
+      {/* Favorites Modal (moved from footer) */}
+      <Modal visible={favoritesModalVisible} transparent animationType="slide" onRequestClose={() => setFavoritesModalVisible(false)}>
+        <View style={styles.modalOverlay}><View style={[styles.modalContent, { backgroundColor: isDark ? '#0B1220' : '#FFF', maxHeight: 400 }]}>
+          <Text style={[styles.modalTitle, { color: isDark ? '#E2E8F0' : '#111' }]}>Favorites</Text>
+          {favorites.length === 0 ? (<Text style={{ color: isDark ? '#9CA3AF' : '#4A5568' }}>No favorites saved.</Text>) : (favorites.map((f, i) => (
+            <TouchableOpacity key={`fav-item-${i}`} style={{ padding: 10, borderRadius: 8, marginVertical: 6, backgroundColor: isDark ? '#071127' : '#F7FAFC' }} onPress={() => { setFavoritesModalVisible(false); mapRef.current?.animateToRegion({ latitude: f.latitude, longitude: f.longitude, latitudeDelta: 0.01, longitudeDelta: 0.01 }, 350); }}>
+              <Text style={{ color: isDark ? '#E2E8F0' : '#111' }}>{`${f.latitude.toFixed(5)}, ${f.longitude.toFixed(5)}`}</Text>
+              <View style={{ flexDirection: 'row', marginTop: 6 }}>
+                <TouchableOpacity style={{ marginRight: 12 }} onPress={() => startNavigationTo(f.latitude, f.longitude)}><Text style={{ color: '#2563EB' }}>Navigate</Text></TouchableOpacity>
+                <TouchableOpacity onPress={() => { setFavorites((prev) => prev.filter((_, idx) => idx !== i)); }}><Text style={{ color: '#EF4444' }}>Remove</Text></TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          ))) }
+
+          <View style={{ marginTop: 12, flexDirection: 'row', justifyContent: 'flex-end' }}>
+            <TouchableOpacity style={styles.modalButtonCancel} onPress={() => setFavoritesModalVisible(false)}><Text>Close</Text></TouchableOpacity>
+          </View>
+
+        </View></View>
+      </Modal>
+
+      {/* Search Modal (simple) */}
+      <Modal visible={searchModalVisible} transparent animationType="slide" onRequestClose={closeSearch}>
+        <View style={styles.modalOverlay}><View style={[styles.modalContent, { backgroundColor: isDark ? '#0B1220' : '#FFF' }]}>
+          <Text style={[styles.modalTitle, { color: isDark ? '#E2E8F0' : '#111' }]}>Search place</Text>
+          <TextInput placeholder="Enter place or address (or lat,lng)" value={searchQuery} onChangeText={setSearchQuery} style={[styles.input, { backgroundColor: isDark ? '#111827' : '#F7FAFC', color: isDark ? '#E2E8F0' : '#111' }]} placeholderTextColor={isDark ? '#9CA3AF' : '#9CA3AF'} />
+
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
+            <TouchableOpacity style={styles.modalButtonCancel} onPress={closeSearch}><Text>Cancel</Text></TouchableOpacity>
+            <TouchableOpacity style={styles.modalButtonPrimary} onPress={performSearchAndCenter}><Text style={{ color: 'white' }}>Go</Text></TouchableOpacity>
+          </View>
+        </View></View>
+      </Modal>
+
     </SafeAreaView>
   );
 };
@@ -630,10 +730,8 @@ const styles = StyleSheet.create({
     marginLeft: 8,
   },
   shareButtonText: { color: 'white', marginLeft: 6, fontWeight: '600' },
-
   mapContainer: { flex: 1 },
   map: { width: '100%', height: '100%' },
-
   footer: {
     padding: 12,
     flexDirection: 'row',
@@ -645,7 +743,6 @@ const styles = StyleSheet.create({
   addressTitle: { fontSize: 14, fontWeight: '700' },
   address: { fontSize: 12 },
   smallText: { fontSize: 11 },
-
   footerButton: {
     width: 44,
     height: 44,
@@ -655,7 +752,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-
   sosButton: {
     position: 'absolute',
     right: 16,
@@ -669,7 +765,6 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   sosText: { color: 'white', fontWeight: '700', marginTop: 4, fontSize: 12 },
-
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.45)',
@@ -709,12 +804,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   input: { padding: 10, borderRadius: 8, marginVertical: 8 },
-
-  // Right-side compact history control
   verticalHistoryRight: {
     position: 'absolute',
     right: 16,
-    bottom: 186, // above SOS (SOS at bottom ~110) and footer, tuned spacing
+    bottom: 186,
     width: 56,
     padding: 8,
     borderRadius: 12,
@@ -730,8 +823,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-
-  // Expanded history panel that sits just above footer (centered horizontal)
   historyPanelExpanded: {
     position: 'absolute',
     left: 12,
@@ -742,12 +833,10 @@ const styles = StyleSheet.create({
     elevation: 6,
     alignItems: 'center',
   },
-
   smallAction: {
     padding: 6,
     marginLeft: 8,
   },
-
   playButton: {
     backgroundColor: '#2563EB',
     width: 40,
@@ -757,7 +846,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginLeft: 8,
   },
-
   historyContainer: {
     position: 'absolute',
     left: 12,
@@ -771,3 +859,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
   },
 });
+
+// Notes for maintainers:
+// - Removed battery display feature as requested.
+// - Current location address is fetched via Nominatim reverse geocoding and shown in the UI.
+// - Sharing is now a one-shot share that includes the current address and coordinates (no share IDs).
+// - Home can be saved (footer Home button) and navigated to using OSRM (open-source) in-app routing.
+// - If you want the share to periodically update to family, we should implement a backend or WebSocket/SSE listener; I kept the share simple per your request.
