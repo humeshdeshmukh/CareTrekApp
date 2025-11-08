@@ -147,17 +147,17 @@ const MapScreen: React.FC = () => {
   // Get current location
   const getCurrentLocation = async () => {
     console.log('Getting current location...');
-    
+
     try {
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
         timeInterval: 5000,
         distanceInterval: 5,
       });
-      
+
       console.log('Got position:', location);
       const { latitude, longitude, accuracy } = location.coords;
-      
+
       // Only update if we have valid coordinates
       if (latitude && longitude) {
         const newLocation = {
@@ -165,12 +165,12 @@ const MapScreen: React.FC = () => {
           longitude,
           timestamp: Date.now(),
         };
-        
+
         console.log('New location:', newLocation);
         setCurrentLocation(newLocation);
         setLocationHistory((prev) => [...prev.slice(-199), newLocation]);
         checkSafeZones(newLocation);
-        
+
         // Center map on current location
         if (mapRef.current) {
           mapRef.current.animateToRegion({
@@ -180,13 +180,13 @@ const MapScreen: React.FC = () => {
             longitudeDelta: 0.01,
           }, 350);
         }
-        
+
         return newLocation;
       }
     } catch (error: any) {
       console.warn('Error getting location:', error);
       let errorMessage = 'Unable to get your current location.';
-      
+
       if (error?.code === 'E_LOCATION_UNAUTHORIZED') {
         errorMessage = 'Location permission was denied. Please enable it in app settings.';
       } else if (error?.code === 'E_LOCATION_UNAVAILABLE') {
@@ -194,7 +194,7 @@ const MapScreen: React.FC = () => {
       } else if (error?.code === 'E_LOCATION_TIMEOUT') {
         errorMessage = 'Location request timed out. Please try again.';
       }
-      
+
       Alert.alert('Location Error', errorMessage, [
         { text: 'Open Settings', onPress: () => Linking.openSettings() },
         { text: 'OK' }
@@ -206,7 +206,7 @@ const MapScreen: React.FC = () => {
   // Watch position for updates
   const watchPosition = () => {
     let subscription: Location.LocationSubscription | null = null;
-    
+
     Location.watchPositionAsync(
       {
         accuracy: Location.Accuracy.High,
@@ -229,7 +229,7 @@ const MapScreen: React.FC = () => {
     }).catch(error => {
       console.warn('Error watching location:', error);
     });
-    
+
     // Return cleanup function
     return () => {
       if (subscription) {
@@ -245,10 +245,10 @@ const MapScreen: React.FC = () => {
       if (hasPermission) {
         // Get initial location
         await getCurrentLocation();
-        
+
         // Start watching position for updates
         const cleanupWatch = watchPosition();
-        
+
         // Return cleanup function
         return () => {
           if (cleanupWatch) {
@@ -368,23 +368,66 @@ const MapScreen: React.FC = () => {
     return R * c;
   };
 
-  // ---------- Reverse geocoding (Nominatim) ----------
+  // ---------- Reverse geocoding (Nominatim) - improved for long precise address ----------
+  const buildLongAddressFromNominatim = (addrObj: any) => {
+    if (!addrObj) return '';
+    const parts: string[] = [];
+
+    const pushIf = (v?: string | null) => { if (v && v.trim()) parts.push(v.trim()); };
+
+    // Common fields in priority order
+    pushIf(addrObj.house_number);
+    pushIf(addrObj.road || addrObj.pedestrian || addrObj.cycleway);
+    pushIf(addrObj.neighbourhood || addrObj.suburb || addrObj.village || addrObj.hamlet);
+    pushIf(addrObj.city_district);
+    pushIf(addrObj.city || addrObj.town || addrObj.village);
+    pushIf(addrObj.county);
+    pushIf(addrObj.state_district);
+    pushIf(addrObj.state);
+    pushIf(addrObj.postcode);
+    pushIf(addrObj.country);
+
+    return parts.join(', ');
+  };
+
   const reverseGeocode = async (lat: number, lon: number) => {
     try {
-      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}`;
+      // request addressdetails=1 and namedetails to get full components
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&addressdetails=1`;
       const res = await fetch(url, { headers: { 'User-Agent': 'CareTrek/1.0 (contact: none)' } });
       if (!res.ok) throw new Error('geocode failed');
       const json = await res.json();
-      return json.display_name || `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+
+      // Build the most precise long address possible
+      const longAddress = buildLongAddressFromNominatim(json.address) || json.display_name || `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
+
+      // Append extra context like place type or notable name if available
+      const named = json.name || json.display_name || '';
+      const placeType = json.type ? `(${json.type})` : '';
+
+      // Final address: longAddress + named/placeType
+      const final = [longAddress, named, placeType].filter(Boolean).join(' ').trim();
+
+      return final || `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
     } catch (e) {
       console.warn('Reverse geocode error', e);
       return `${lat.toFixed(6)}, ${lon.toFixed(6)}`;
     }
   };
 
-  // ---------- Share (simple one-shot share with address) ----------
+  // ---------- Share (improved to include cross-platform links & full address) ----------
   const openShareModal = () => setShareModalVisible(true);
   const closeShareModal = () => setShareModalVisible(false);
+
+  const makeCrossPlatformLocationLinks = (lat: number, lon: number) => {
+    const latStr = lat.toFixed(6);
+    const lonStr = lon.toFixed(6);
+    const google = `https://www.google.com/maps/search/?api=1&query=${latStr},${lonStr}`;
+    const apple = `http://maps.apple.com/?q=${latStr},${lonStr}`;
+    const osm = `https://www.openstreetmap.org/?mlat=${latStr}&mlon=${lonStr}#map=19/${latStr}/${lonStr}`;
+    const geoUri = `geo:${latStr},${lonStr}`; // works on many android devices
+    return { google, apple, osm, geoUri };
+  };
 
   const startLiveShare = async () => {
     setIsSharingLive(true);
@@ -392,11 +435,21 @@ const MapScreen: React.FC = () => {
 
     // get address for current location
     const addr = await reverseGeocode(currentLocation.latitude, currentLocation.longitude);
-    const locText = `${addr} (lat:${currentLocation.latitude.toFixed(6)}, lon:${currentLocation.longitude.toFixed(6)})`;
-    const message = `Current location: ${locText}`;
+    const links = makeCrossPlatformLocationLinks(currentLocation.latitude, currentLocation.longitude);
+
+    const locTextLines = [
+      `Location address: ${addr}`,
+      `Coordinates: ${currentLocation.latitude.toFixed(6)}, ${currentLocation.longitude.toFixed(6)}`,
+      `Open in Google Maps: ${links.google}`,
+      `Open in Apple Maps: ${links.apple}`,
+      `Open in OSM: ${links.osm}`,
+      `Intent (geo URI): ${links.geoUri}`,
+    ];
+
+    const message = `My precise location:\n\n${locTextLines.join('\n')}`;
 
     try {
-      await Share.share({ message, title: 'My location' });
+      await Share.share({ message, title: 'My precise location' });
     } catch (e) {
       console.warn('Share failed', e);
       Alert.alert('Share', 'Unable to open share sheet.');
@@ -438,11 +491,12 @@ const MapScreen: React.FC = () => {
     }
   };
 
-  // ---------- SOS ----------
+  // ---------- SOS (improved with long address + links) ----------
   const triggerSOS = async () => {
     const addr = await reverseGeocode(currentLocation.latitude, currentLocation.longitude);
-    const locText = `${addr} (https://www.google.com/maps/search/?api=1&query=${currentLocation.latitude},${currentLocation.longitude})`;
-    const message = `SOS! Please help. My location: ${locText}`;
+    const links = makeCrossPlatformLocationLinks(currentLocation.latitude, currentLocation.longitude);
+    const locText = `${addr} (Google Maps: ${links.google})`;
+    const message = `SOS! Please help. My location:\n\nAddress: ${addr}\nCoordinates: ${currentLocation.latitude.toFixed(6)}, ${currentLocation.longitude.toFixed(6)}\nGoogle Maps: ${links.google}\nOSM: ${links.osm}`;
 
     try {
       await Share.share({ message, title: 'SOS — Help' });
@@ -641,7 +695,7 @@ const MapScreen: React.FC = () => {
         <View style={styles.modalOverlay}><View style={[styles.modalContent, { backgroundColor: isDark ? '#0B1220' : '#FFF' }]}>
           <Text style={[styles.modalTitle, { color: isDark ? '#E2E8F0' : '#111' }]}>Share location</Text>
 
-          <Text style={{ marginBottom: 12 }}>Share your current location (address + coordinates) with family.</Text>
+          <Text style={{ marginBottom: 12 }}>Share your current precise location (full address + coordinates + open links).</Text>
 
           <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
             <TouchableOpacity style={styles.modalButtonCancel} onPress={closeShareModal}><Text>Cancel</Text></TouchableOpacity>
@@ -861,8 +915,7 @@ const styles = StyleSheet.create({
 });
 
 // Notes for maintainers:
-// - Removed battery display feature as requested.
-// - Current location address is fetched via Nominatim reverse geocoding and shown in the UI.
-// - Sharing is now a one-shot share that includes the current address and coordinates (no share IDs).
-// - Home can be saved (footer Home button) and navigated to using OSRM (open-source) in-app routing.
-// - If you want the share to periodically update to family, we should implement a backend or WebSocket/SSE listener; I kept the share simple per your request.
+// - Reverse geocoding now requests addressdetails and constructs a long, componentized address (house number, road, neighbourhood, city, state, postcode, country).
+// - Share and SOS now include multiple open links (Google Maps, Apple Maps, OpenStreetMap) and a geo: URI so the receiver can open the precise location in most mapping apps.
+// - Marker description displays the full address string when available.
+// - This keeps the one-shot share behaviour; for continuous live-sharing you'd need a backend or socket-based approach.
