@@ -23,14 +23,12 @@ import { useTranslation } from '../../contexts/translation/TranslationContext';
 import { useCachedTranslation } from '../../hooks/useCachedTranslation';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as Notifications from 'expo-notifications';
-// Audio import removed as we're using system sounds
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Configure notification handler with recommended properties
+// Notification handler (foreground behavior)
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowBanner: true,
-    shouldShowList: true,
+    shouldShowAlert: true,
     shouldPlaySound: true,
     shouldSetBadge: false,
   }),
@@ -39,7 +37,7 @@ Notifications.setNotificationHandler({
 type Reminder = {
   id: string;
   title: string;
-  time: string;
+  time: string; // "hh:mm AM/PM"
   date: Date;
   type: 'medication' | 'activity';
   enabled: boolean;
@@ -47,84 +45,45 @@ type Reminder = {
 };
 
 type RemindersScreenNavigationProp = StackNavigationProp<RootStackParamList, 'Reminders'>;
-
 const STORAGE_KEY = '@CareTrek/reminders';
 
-// Trigger haptic feedback for notifications
+// Haptics / vibration helper
 const triggerNotificationFeedback = async () => {
-  console.log('Triggering haptic feedback...');
   try {
     if (Platform.OS === 'ios') {
       await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      // Add a small delay and try impact feedback as well
       setTimeout(() => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(console.warn);
-      }, 100);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+      }, 120);
     } else {
-      // Use a more reliable vibration pattern for Android
-      Vibration.vibrate([0, 300, 200, 300, 200, 300], false);
+      Vibration.vibrate([0, 300, 200, 300], false);
     }
-  } catch (error) {
-    console.warn('Haptic feedback error:', error);
-    Vibration.vibrate(500, false);
+  } catch (e) {
+    console.warn('Haptic error', e);
+    Vibration.vibrate(300);
   }
 };
 
+// Helper: parse "hh:mm AM/PM" to {hours, minutes}
+const parseTimeString = (timeStr = '08:00 AM') => {
+  const [time, modifier] = timeStr.split(' ');
+  let [hours, minutes] = time.split(':').map(Number);
+  if (modifier === 'PM' && hours < 12) hours += 12;
+  if (modifier === 'AM' && hours === 12) hours = 0;
+  return { hours, minutes };
+};
+
+// Helper: convert "hh:mm AM/PM" to Date (next occurrence)
+const timeStringToDate = (timeStr = '08:00 AM') => {
+  const now = new Date();
+  const { hours, minutes } = parseTimeString(timeStr);
+  const d = new Date(now);
+  d.setHours(hours, minutes, 0, 0);
+  if (d <= now) d.setDate(d.getDate() + 1);
+  return d;
+};
 
 const RemindersScreen: React.FC = () => {
-  // Move action handlers inside the component to access state and props
-  const showReminderActions = useCallback((reminderId: string) => {
-    Alert.alert(
-      'Reminder',
-      'What would you like to do?',
-      [
-        {
-          text: 'Stop Reminder',
-          style: 'destructive',
-          onPress: () => handleStopReminder(reminderId),
-        },
-        {
-          text: 'Snooze for 5 minutes',
-          onPress: () => handleSnoozeReminder(reminderId, 5),
-        },
-        {
-          text: 'Cancel',
-          style: 'cancel',
-        },
-      ]
-    );
-  }, [reminders, saveReminders]);
-
-  const handleStopReminder = useCallback((reminderId: string) => {
-    setReminders((prevReminders: Reminder[]) => {
-      const updated = prevReminders.map(r => 
-        r.id === reminderId ? { ...r, enabled: false } : r
-      );
-      saveReminders(updated).catch(console.error);
-      return updated;
-    });
-  }, [saveReminders]);
-
-  const handleSnoozeReminder = useCallback(async (reminderId: string, minutes: number) => {
-    const reminder = reminders.find(r => r.id === reminderId);
-    if (!reminder) return;
-
-    // Schedule a new notification with proper type
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: 'Snoozed: ' + (reminder.title || 'Reminder'),
-        body: `Snoozed for ${minutes} minutes`,
-        sound: true,
-        priority: 'high',
-        data: { reminderId, isSnoozed: true },
-        ...(Platform.OS === 'android' && { channelId: 'reminders' }),
-      },
-      trigger: {
-        seconds: minutes * 60,
-        repeats: false
-      } as any, // Type assertion needed for the trigger type
-    });
-  }, [reminders]);
   const navigation = useNavigation<RemindersScreenNavigationProp>();
   const { isDark } = useTheme();
   const { currentLanguage } = useTranslation();
@@ -135,7 +94,6 @@ const RemindersScreen: React.FC = () => {
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [editingReminder, setEditingReminder] = useState<Reminder | null>(null);
-  // newReminder serves as the form state for 'add' mode
   const [newReminder, setNewReminder] = useState<Partial<Reminder>>({
     title: '',
     time: '08:00 AM',
@@ -143,190 +101,225 @@ const RemindersScreen: React.FC = () => {
     type: 'medication',
     enabled: true,
   });
-
-  // Controls whether the add/edit form modal is visible
   const [isFormVisible, setIsFormVisible] = useState(false);
 
-  // Save to storage helper
+  // Persist reminders
   const saveReminders = useCallback(async (updatedReminders: Reminder[]) => {
     try {
-      const jsonValue = JSON.stringify(updatedReminders);
-      await AsyncStorage.setItem(STORAGE_KEY, jsonValue);
-    } catch (error) {
-      console.error('Error saving reminders:', error);
+      await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(updatedReminders));
+    } catch (e) {
+      console.error('saveReminders error', e);
     }
   }, []);
 
-  // Schedule a local notification for a reminder
+  // Schedule a notification for a reminder (returns notificationId or null)
   const scheduleNotification = useCallback(
     async (reminder: Reminder) => {
       try {
-        // Check/request permissions
-        const existing = await Notifications.getPermissionsAsync();
-        if (!existing.granted) {
-          const requested = await Notifications.requestPermissionsAsync({
-            ios: {
-              allowAlert: true,
-              allowBadge: true,
-              allowSound: true,
-              allowDisplayInCarPlay: true,
-              allowCriticalAlerts: true,
-            },
-          });
-          if (!requested.granted) {
-            console.warn('Notification permissions not granted');
+        // Request/check permissions
+        const permission = await Notifications.getPermissionsAsync();
+        if (permission.status !== 'granted') {
+          const req = await Notifications.requestPermissionsAsync();
+          if (req.status !== 'granted') {
+            console.warn('Notifications permission denied');
             return null;
           }
         }
-        
-        // Create a notification channel for Android
+
+        // Create Android channel if needed
         if (Platform.OS === 'android') {
           await Notifications.setNotificationChannelAsync('reminders', {
             name: 'Reminders',
             importance: Notifications.AndroidImportance.HIGH,
-            vibrationPattern: [0, 250, 250, 250],
+            vibrationPattern: [0, 300, 200, 300],
             enableVibrate: true,
-            enableLights: true,
-            lightColor: '#FFA500',
+            sound: 'default',
           });
         }
 
-        // Cancel any existing notification for this reminder
+        // Cancel existing scheduled notification for this reminder if exists
         if (reminder.notificationId) {
           try {
             await Notifications.cancelScheduledNotificationAsync(reminder.notificationId);
           } catch (e) {
-            console.warn('Failed to cancel existing notification', e);
+            // ignore
           }
         }
 
-        // Parse time from reminder
-        const { hours, minutes } = parseTimeString(reminder.time || '08:00 AM');
+        // Compute next occurrence
+        const scheduledDate = timeStringToDate(reminder.time);
 
-        // Ensure time is in the future
-        const now = new Date();
-        const scheduledTime = new Date();
-        scheduledTime.setHours(hours, minutes, 0, 0);
-        
-        // If the time has already passed today, schedule for tomorrow
-        if (scheduledTime <= now) {
-          scheduledTime.setDate(scheduledTime.getDate() + 1);
+        // Schedule daily repeating notification at hour/minute
+        const trigger: any = {
+          hour: scheduledDate.getHours(),
+          minute: scheduledDate.getMinutes(),
+          repeats: true,
+        };
+
+        const content: any = {
+          title: `CareTrek Reminder: ${reminder.title || 'Reminder'}`,
+          body: `Time for your ${reminder.type === 'medication' ? 'medication' : 'activity'}.`,
+          data: { reminderId: reminder.id },
+          sound: 'default',
+        };
+
+        if (Platform.OS === 'android') {
+          content.channelId = 'reminders';
         }
 
-        // Schedule the notification with sound and vibration
         const notificationId = await Notifications.scheduleNotificationAsync({
-          content: {
-            title: 'CareTrek Reminder: ' + (reminder.title || 'Reminder'),
-            body: 'Time to take your ' + (reminder.type === 'medication' ? 'medication' : 'activity'),
-            sound: true,
-            priority: 'high',
-            vibrate: [0, 300, 200, 300],
-            data: { 
-              reminderId: reminder.id,
-              type: reminder.type
-            },
-            // For Android 8.0+ we need to set the channelId
-            ...(Platform.OS === 'android' && { channelId: 'reminders' }),
-          },
-          trigger: {
-            hour: scheduledTime.getHours(),
-            minute: scheduledTime.getMinutes(),
-            repeats: true,
-          } as any,
+          content,
+          trigger,
         });
-        
-        // Trigger haptic feedback when notification is scheduled
+
+        // Save notificationId functionally
+        setReminders(prev => {
+          const updated = prev.map(r => (r.id === reminder.id ? { ...r, notificationId } : r));
+          saveReminders(updated).catch(() => {});
+          return updated;
+        });
+
+        // small feedback
         triggerNotificationFeedback();
 
-        // Update the reminder with the notification ID
-        const updated = reminders.map(r =>
-          r.id === reminder.id ? { ...r, notificationId } : r
-        );
-        setReminders(updated);
-        await saveReminders(updated);
-
         return notificationId;
-      } catch (error) {
-        console.warn('Error scheduling notification:', error);
+      } catch (e) {
+        console.warn('scheduleNotification error', e);
         return null;
+      }
+    },
+    [saveReminders]
+  );
+
+  // Load reminders from storage; schedule ones lacking notificationId
+  const loadReminders = useCallback(async () => {
+    try {
+      const json = await AsyncStorage.getItem(STORAGE_KEY);
+      if (!json) return;
+      const parsed = JSON.parse(json) as any[];
+      const normalized: Reminder[] = parsed.map(r => ({ ...r, date: r.date ? new Date(r.date) : new Date() }));
+      setReminders(normalized);
+
+      // schedule enabled reminders missing notificationId
+      normalized.forEach(rem => {
+        if (rem.enabled && !rem.notificationId) {
+          scheduleNotification(rem).catch(() => {});
+        }
+      });
+    } catch (e) {
+      console.error('loadReminders error', e);
+    }
+  }, [scheduleNotification]);
+
+  // Stop (disable) a reminder
+  const handleStopReminder = useCallback(
+    async (reminderId: string) => {
+      setReminders(prev => {
+        const updated = prev.map(r => (r.id === reminderId ? { ...r, enabled: false } : r));
+        saveReminders(updated).catch(() => {});
+        return updated;
+      });
+
+      // cancel scheduled notification if present (read latest state after the update)
+      const target = reminders.find(r => r.id === reminderId);
+      if (target?.notificationId) {
+        try {
+          await Notifications.cancelScheduledNotificationAsync(target.notificationId);
+          setReminders(prev => {
+            const updated = prev.map(r => (r.id === reminderId ? { ...r, notificationId: null } : r));
+            saveReminders(updated).catch(() => {});
+            return updated;
+          });
+        } catch (e) {
+          console.warn('Failed to cancel scheduled notification on stop', e);
+        }
       }
     },
     [reminders, saveReminders]
   );
 
-  // Load reminders from storage and schedule enabled ones
-  const loadReminders = useCallback(async () => {
-    try {
-      const jsonValue = await AsyncStorage.getItem(STORAGE_KEY);
-      if (jsonValue !== null) {
-        const savedReminders = JSON.parse(jsonValue) as any[];
-        const parsedReminders: Reminder[] = savedReminders.map(r => ({
-          ...r,
-          date: r.date ? new Date(r.date) : new Date(),
-        }));
-        setReminders(parsedReminders);
+  // Snooze once for X minutes
+  const handleSnoozeReminder = useCallback(
+    async (reminderId: string, minutes: number) => {
+      const reminder = reminders.find(r => r.id === reminderId);
+      if (!reminder) return;
 
-        // Schedule for enabled reminders (but don't re-schedule if they already have notificationId)
-        parsedReminders.forEach(rem => {
-          if (rem.enabled && !rem.notificationId) {
-            scheduleNotification(rem).catch(e => console.warn('Failed to schedule on load', e));
-          }
+      try {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: `Snoozed: ${reminder.title || 'Reminder'}`,
+            body: `Snoozed for ${minutes} minutes`,
+            data: { reminderId: reminder.id, isSnoozed: true },
+            sound: 'default',
+          },
+          trigger: { seconds: minutes * 60 } as any,
         });
+      } catch (e) {
+        console.warn('Snooze failed', e);
       }
-    } catch (error) {
-      console.error('Error loading reminders:', error);
-    }
-  }, [scheduleNotification]);
+    },
+    [reminders]
+  );
 
-  // Setup notification listeners for foreground and responses
+  // Show action choices when tapping notification
+  const showReminderActions = useCallback(
+    (reminderId: string) => {
+      Alert.alert('Reminder', 'What would you like to do?', [
+        {
+          text: 'Stop Reminder',
+          style: 'destructive',
+          onPress: () => handleStopReminder(reminderId),
+        },
+        {
+          text: 'Snooze 5m',
+          onPress: () => handleSnoozeReminder(reminderId, 5),
+        },
+        { text: 'Cancel', style: 'cancel' },
+      ]);
+    },
+    [handleStopReminder, handleSnoozeReminder]
+  );
+
+  // Setup notification listeners
   const setupNotificationListeners = useCallback(() => {
-    // Foreground received - handle notification when app is in foreground
-    notificationListener.current = Notifications.addNotificationReceivedListener(notification => {
-      console.log('Notification received:', notification);
-      
-      // Only process if it's a valid notification
-      if (notification.request.content.title || notification.request.content.body) {
-        console.log('Processing notification with content:', {
-          title: notification.request.content.title,
-          body: notification.request.content.body,
-          trigger: notification.request.trigger
-        });
-
-        // For Android, we'll use the notification's built-in vibration
-        if (Platform.OS === 'android') {
-          console.log('Android: Using notification channel vibration');
-          // The vibration is handled by the notification channel
-          // We'll add a small delay to ensure the notification is shown
-          setTimeout(() => {
-            Vibration.vibrate([0, 300, 200, 300]);
-          }, 200);
-        } else {
-          // For iOS, use haptics
-          console.log('iOS: Triggering haptic feedback');
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy)
-            .catch(e => console.warn('Haptics error:', e));
-        }
-      }
+    // Foreground: play feedback
+    notificationListener.current = Notifications.addNotificationReceivedListener(n => {
+      // Quick feedback
+      triggerNotificationFeedback();
+      if (Platform.OS === 'android') Vibration.vibrate([0, 300, 200], false);
     });
 
-    // Response (user tapped notification)
-    responseListener.current = Notifications.addNotificationResponseReceivedListener(async (response) => {
-      console.log('Notification tapped:', response);
-      
-      const { reminderId } = response.notification.request.content.data;
-      
-      // Trigger haptic feedback
+    // When user taps notification or action
+    responseListener.current = Notifications.addNotificationResponseReceivedListener(async response => {
+      const reminderId = response.notification.request.content.data?.reminderId;
+      const actionId = response.actionIdentifier;
+
+      // feedback
       await triggerNotificationFeedback();
-      
-      // Show action sheet if this is a reminder notification
-      if (reminderId) {
-        showReminderActions(reminderId.toString());
-      }
-      // Optionally navigate to detail screen using response.notification.request.content.data
-    });
-  }, []);
 
-  // Clean up listeners
+      // If action buttons used (iOS/Android), interpret them:
+      if (actionId === 'complete') {
+        if (reminderId) handleStopReminder(reminderId.toString());
+        return;
+      } else if (actionId === 'snooze') {
+        if (reminderId) handleSnoozeReminder(reminderId.toString(), 5);
+        return;
+      }
+
+      // default - open actions
+      if (reminderId) showReminderActions(reminderId.toString());
+    });
+
+    // return cleanup (optional)
+    return () => {
+      notificationListener.current?.remove();
+      responseListener.current?.remove();
+      notificationListener.current = null;
+      responseListener.current = null;
+    };
+  }, [handleStopReminder, handleSnoozeReminder, showReminderActions]);
+
+  // Cleanup helper
   const cleanupNotificationListeners = useCallback(() => {
     try {
       notificationListener.current?.remove();
@@ -339,22 +332,183 @@ const RemindersScreen: React.FC = () => {
     }
   }, []);
 
-  // Focus effect: load reminders & setup listeners, cleanup on blur
+  // Focus effect
   useFocusEffect(
     useCallback(() => {
       loadReminders();
-      setupNotificationListeners();
-
+      const cleanup = setupNotificationListeners();
       return () => {
+        cleanup();
         cleanupNotificationListeners();
       };
     }, [loadReminders, setupNotificationListeners, cleanupNotificationListeners])
   );
 
-  // Navigation back
-  const handleBack = () => navigation.goBack();
+  // Toggle enabled
+  const toggleReminder = async (id: string) => {
+    setReminders(prev => {
+      const updated = prev.map(r => (r.id === id ? { ...r, enabled: !r.enabled } : r));
+      saveReminders(updated).catch(() => {});
+      return updated;
+    });
 
-  // Translations (assume useCachedTranslation returns { translatedText })
+    // Read current state to decide schedule/cancel
+    const toggled = reminders.find(r => r.id === id);
+    if (!toggled) return;
+
+    if (!toggled.enabled) {
+      // was disabled -> now enabled
+      await scheduleNotification({ ...toggled, enabled: true });
+    } else {
+      // was enabled -> now disabled
+      if (toggled.notificationId) {
+        try {
+          await Notifications.cancelScheduledNotificationAsync(toggled.notificationId);
+          setReminders(prev => {
+            const updated = prev.map(r => (r.id === id ? { ...r, notificationId: null } : r));
+            saveReminders(updated).catch(() => {});
+            return updated;
+          });
+        } catch (e) {
+          console.warn('Cancel scheduled failed', e);
+        }
+      }
+    }
+  };
+
+  // Add reminder
+  const addReminder = async () => {
+    if (!newReminder.title || !newReminder.title.trim()) {
+      Alert.alert('Error', 'Please enter a title for the reminder');
+      return;
+    }
+
+    const reminder: Reminder = {
+      id: Date.now().toString(),
+      title: newReminder.title!.trim(),
+      time: newReminder.time || '08:00 AM',
+      date: newReminder.date || timeStringToDate(newReminder.time || '08:00 AM'),
+      type: (newReminder.type as 'medication' | 'activity') || 'medication',
+      enabled: newReminder.enabled ?? true,
+      notificationId: null,
+    };
+
+    // Add & persist
+    setReminders(prev => {
+      const updated = [...prev, reminder];
+      saveReminders(updated).catch(() => {});
+      return updated;
+    });
+
+    // Schedule
+    await scheduleNotification(reminder);
+
+    // reset & close
+    setNewReminder({ title: '', time: '08:00 AM', date: new Date(), type: 'medication', enabled: true });
+    setIsFormVisible(false);
+    Alert.alert('Success', 'Reminder added');
+  };
+
+  // Update existing reminder
+  const updateReminder = async () => {
+    if (!editingReminder) return;
+    if (!editingReminder.title.trim()) {
+      Alert.alert('Error', 'Please enter a title');
+      return;
+    }
+
+    const updatedReminder: Reminder = {
+      ...editingReminder,
+      date: editingReminder.date ? new Date(editingReminder.date) : timeStringToDate(editingReminder.time),
+    };
+
+    // Update state & persist
+    setReminders(prev => {
+      const updated = prev.map(r => (r.id === updatedReminder.id ? updatedReminder : r));
+      saveReminders(updated).catch(() => {});
+      return updated;
+    });
+
+    if (updatedReminder.enabled) {
+      await scheduleNotification(updatedReminder);
+    } else if (updatedReminder.notificationId) {
+      try {
+        await Notifications.cancelScheduledNotificationAsync(updatedReminder.notificationId);
+        setReminders(prev => {
+          const cleared = prev.map(r => (r.id === updatedReminder.id ? { ...r, notificationId: null } : r));
+          saveReminders(cleared).catch(() => {});
+          return cleared;
+        });
+      } catch (e) {
+        console.warn('Cancel failed on update', e);
+      }
+    }
+
+    setEditingReminder(null);
+    setIsFormVisible(false);
+    Alert.alert('Success', 'Reminder updated');
+  };
+
+  // Delete reminder
+  const deleteReminder = (id: string) => {
+    Alert.alert(
+      'Delete Reminder',
+      'Are you sure you want to delete this reminder?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const target = reminders.find(r => r.id === id);
+            if (target?.notificationId) {
+              try {
+                await Notifications.cancelScheduledNotificationAsync(target.notificationId);
+              } catch (e) {
+                console.warn('Cancel on delete failed', e);
+              }
+            }
+            const updated = reminders.filter(r => r.id !== id);
+            setReminders(updated);
+            await saveReminders(updated);
+            Alert.alert('Success', 'Reminder deleted');
+          },
+        },
+      ],
+      { cancelable: true }
+    );
+  };
+
+  // Time picker handlers
+  const showTimePickerDialog = () => setShowTimePicker(true);
+  const onTimeChange = (event: any, selectedDate?: Date) => {
+    if (Platform.OS !== 'ios') setShowTimePicker(false);
+    if (!selectedDate) return;
+
+    const hours = selectedDate.getHours();
+    const minutes = selectedDate.getMinutes();
+    const ampm = hours >= 12 ? 'PM' : 'AM';
+    const formattedHours = hours % 12 || 12;
+    const formattedTime = `${formattedHours}:${minutes < 10 ? '0' + minutes : minutes} ${ampm}`;
+    const newDate = new Date(selectedDate);
+
+    if (editingReminder) {
+      setEditingReminder(prev => ({ ...prev!, time: formattedTime, date: newDate }));
+    } else {
+      setNewReminder(prev => ({ ...prev, time: formattedTime, date: newDate }));
+    }
+  };
+
+  const openEditModal = (reminder: Reminder) => {
+    setEditingReminder({ ...reminder, date: reminder.date ? new Date(reminder.date) : timeStringToDate(reminder.time) });
+    setIsFormVisible(true);
+  };
+  const closeEditModal = () => {
+    setEditingReminder(null);
+    setIsFormVisible(false);
+  };
+
+  // Translations
   const { translatedText: remindersText } = useCachedTranslation('Reminders', currentLanguage);
   const { translatedText: backText } = useCachedTranslation('Back', currentLanguage);
   const { translatedText: addReminderText } = useCachedTranslation('Add Reminder', currentLanguage);
@@ -367,205 +521,8 @@ const RemindersScreen: React.FC = () => {
   const { translatedText: typeText } = useCachedTranslation('Type', currentLanguage);
   const { translatedText: medicationText } = useCachedTranslation('Medication', currentLanguage);
   const { translatedText: activityText } = useCachedTranslation('Activity', currentLanguage);
-  const { translatedText: confirmDeleteText } = useCachedTranslation('Are you sure you want to delete this reminder?', currentLanguage);
-  const { translatedText: reminderAddedText } = useCachedTranslation('Reminder added', currentLanguage);
-  const { translatedText: reminderUpdatedText } = useCachedTranslation('Reminder updated', currentLanguage);
-  const { translatedText: reminderDeletedText } = useCachedTranslation('Reminder deleted', currentLanguage);
 
-  // Toggle reminder enabled/disabled
-  const toggleReminder = async (id: string) => {
-    const updated = reminders.map(r => 
-      r.id === id ? { ...r, enabled: !r.enabled } : r
-    );
-    
-    setReminders(updated);
-    await saveReminders(updated);
-
-    const toggled = updated.find(r => r.id === id);
-    if (toggled) {
-      if (toggled.enabled) {
-        await scheduleNotification(toggled);
-      } else if (toggled.notificationId) {
-        try {
-          await Notifications.cancelScheduledNotificationAsync(toggled.notificationId);
-          // clear id in state & storage
-          setReminders(prev => {
-            const cleared = prev.map(r => (r.id === id ? { ...r, notificationId: null } : r));
-            saveReminders(cleared).catch(() => {});
-            return cleared;
-          });
-        } catch (e) {
-          console.warn('Cancel scheduled notification failed', e);
-        }
-      }
-    }
-  };
-
-  // Add new reminder
-  const addReminder = async () => {
-    if (!newReminder.title || !newReminder.title.trim()) {
-      Alert.alert('Error', 'Please enter a title for the reminder');
-      return;
-    }
-
-    const reminder: Reminder = {
-      id: Date.now().toString(),
-      title: newReminder.title!.trim(),
-      time: newReminder.time || '08:00 AM',
-      date: newReminder.date || new Date(),
-      type: (newReminder.type as 'medication' | 'activity') || 'medication',
-      enabled: newReminder.enabled ?? true,
-      notificationId: null,
-    };
-
-    // persist immediate
-    setReminders(prev => {
-      const updated = [...prev, reminder];
-      saveReminders(updated).catch(() => {});
-      return updated;
-    });
-
-    // schedule notification (this will update notificationId in state/storage)
-    await scheduleNotification(reminder);
-
-    // reset form & close
-    setNewReminder({
-      title: '',
-      time: '08:00 AM',
-      date: new Date(),
-      type: 'medication',
-      enabled: true,
-    });
-    setIsFormVisible(false);
-
-    Alert.alert('Success', reminderAddedText);
-  };
-
-  // Update editing reminder
-  const updateReminder = async () => {
-    if (!editingReminder) return;
-    if (!editingReminder.title.trim()) {
-      Alert.alert('Error', 'Please enter a title');
-      return;
-    }
-
-    // Create a new reminder object with updated time
-    const updatedReminder = {
-      ...editingReminder,
-      // Ensure we have the latest time from the time picker
-      time: editingReminder.time,
-      // Ensure we have a proper date object
-      date: editingReminder.date ? new Date(editingReminder.date) : timeStringToDate(editingReminder.time)
-    };
-
-    // update state & persist
-    setReminders(prev => {
-      const updated = prev.map(r => (r.id === updatedReminder.id ? updatedReminder : r));
-      saveReminders(updated).catch(console.error);
-      return updated;
-    });
-
-    // update notification if enabled
-    if (updatedReminder.enabled) {
-      await scheduleNotification(updatedReminder);
-    } else if (updatedReminder.notificationId) {
-      try {
-        await Notifications.cancelScheduledNotificationAsync(updatedReminder.notificationId);
-        // clear id
-        setReminders(prev => {
-          const cleared = prev.map(r => (r.id === updatedReminder.id ? { ...r, notificationId: null } : r));
-          saveReminders(cleared).catch(console.error);
-          return cleared;
-        });
-      } catch (e) {
-        console.warn('Cancel scheduled notification failed', e);
-      }
-    }
-
-    setEditingReminder(null);
-    setIsFormVisible(false);
-    Alert.alert('Success', reminderUpdatedText);
-  };
-
-  // Delete reminder with confirmation
-  const deleteReminder = (id: string) => {
-    Alert.alert(
-      'Delete Reminder',
-      confirmDeleteText,
-      [
-        { text: cancelText, style: 'cancel' },
-        {
-          text: deleteText,
-          style: 'destructive',
-          onPress: async () => {
-            const target = reminders.find(r => r.id === id);
-            if (target?.notificationId) {
-              try {
-                await Notifications.cancelScheduledNotificationAsync(target.notificationId);
-              } catch (e) {
-                console.warn('Cancel scheduled notification failed', e);
-              }
-            }
-            const updated = reminders.filter(r => r.id !== id);
-            setReminders(updated);
-            await saveReminders(updated);
-            Alert.alert('Success', reminderDeletedText);
-          },
-        },
-      ]
-    );
-  };
-
-  // Time picker handlers
-  const showTimePickerDialog = () => setShowTimePicker(true);
-
-  const onTimeChange = (event: any, selectedDate?: Date) => {
-    // On Android, when dismissed selectedDate will be undefined
-    if (Platform.OS !== 'ios') {
-      setShowTimePicker(false);
-    }
-
-    if (selectedDate) {
-      const hours = selectedDate.getHours();
-      const minutes = selectedDate.getMinutes();
-      const ampm = hours >= 12 ? 'PM' : 'AM';
-      const formattedHours = hours % 12 || 12;
-      const formattedTime = `${formattedHours}:${minutes < 10 ? '0' + minutes : minutes} ${ampm}`;
-      
-      // Create a new date object to ensure we don't have reference issues
-      const newDate = new Date(selectedDate);
-      
-      if (editingReminder) {
-        setEditingReminder(prev => ({
-          ...prev!,
-          time: formattedTime,
-          date: newDate
-        }));
-      } else {
-        setNewReminder(prev => ({
-          ...prev,
-          time: formattedTime,
-          date: newDate
-        }));
-      }
-    }
-  };
-
-  const openEditModal = (reminder: Reminder) => {
-    // Create a new object to avoid reference issues
-    const reminderWithDate = {
-      ...reminder,
-      date: reminder.date ? new Date(reminder.date) : timeStringToDate(reminder.time)
-    };
-    setEditingReminder(reminderWithDate);
-    setIsFormVisible(true);
-  };
-  const closeEditModal = () => {
-    setEditingReminder(null);
-    setIsFormVisible(false);
-  };
-
-  // Render functions
+  // Render item
   const renderReminder = ({ item }: { item: Reminder }) => (
     <TouchableOpacity
       style={[styles.reminderCard, { backgroundColor: isDark ? '#2D3748' : '#FFFFFF' }]}
@@ -577,41 +534,26 @@ const RemindersScreen: React.FC = () => {
           style={[
             styles.reminderIconContainer,
             {
-              backgroundColor:
-                item.type === 'medication'
-                  ? isDark
-                    ? '#FEB2B233'
-                    : '#FED7D7'
-                  : isDark
-                  ? '#9AE6B433'
-                  : '#C6F6D5',
+              backgroundColor: item.type === 'medication' ? (isDark ? '#FEB2B233' : '#FED7D7') : (isDark ? '#9AE6B433' : '#C6F6D5'),
             },
           ]}
         >
           <Ionicons
             name={item.type === 'medication' ? 'medkit' : 'walk'}
             size={20}
-            color={
-              item.type === 'medication'
-                ? isDark
-                  ? '#FC8181'
-                  : '#E53E3E'
-                : isDark
-                ? '#68D391'
-                : '#38A169'
-            }
+            color={item.type === 'medication' ? (isDark ? '#FC8181' : '#E53E3E') : (isDark ? '#68D391' : '#38A169')}
           />
         </View>
+
         <View style={styles.reminderTextContainer}>
-          <Text style={[styles.reminderTitle, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>
-            {item.title}
-          </Text>
+          <Text style={[styles.reminderTitle, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{item.title}</Text>
           <View style={styles.reminderTimeContainer}>
             <Ionicons name="time-outline" size={14} color={isDark ? '#A0AEC0' : '#4A5568'} style={styles.timeIcon} />
             <Text style={[styles.reminderTime, { color: isDark ? '#A0AEC0' : '#4A5568' }]}>{item.time}</Text>
           </View>
         </View>
       </View>
+
       <View style={styles.reminderActions}>
         <Switch
           value={item.enabled}
@@ -640,9 +582,7 @@ const RemindersScreen: React.FC = () => {
             <TextInput
               style={[styles.textInput, { color: isDark ? '#E2E8F0' : '#1A202C' }]}
               value={formData.title || ''}
-              onChangeText={(text) =>
-                isEditing ? setEditingReminder({ ...editingReminder!, title: text }) : setNewReminder({ ...newReminder, title: text })
-              }
+              onChangeText={text => (isEditing ? setEditingReminder({ ...editingReminder!, title: text }) : setNewReminder({ ...newReminder, title: text }))}
               placeholder="Enter reminder title"
               placeholderTextColor={isDark ? '#718096' : '#A0AEC0'}
             />
@@ -651,23 +591,13 @@ const RemindersScreen: React.FC = () => {
 
         <View style={styles.formGroup}>
           <Text style={[styles.label, { color: isDark ? '#E2E8F0' : '#4A5568' }]}>{timeText}</Text>
-          <TouchableOpacity
-            style={[styles.input, styles.timePickerButton, { backgroundColor: isDark ? '#2D3748' : '#EDF2F7' }]}
-            onPress={showTimePickerDialog}
-          >
+          <TouchableOpacity style={[styles.input, styles.timePickerButton, { backgroundColor: isDark ? '#2D3748' : '#EDF2F7' }]} onPress={showTimePickerDialog}>
             <Ionicons name="time-outline" size={20} color={isDark ? '#E2E8F0' : '#4A5568'} style={styles.timeIcon} />
             <Text style={[styles.timeText, { color: isDark ? '#E2E8F0' : '#1A202C' }]}>{formData.time || '08:00 AM'}</Text>
           </TouchableOpacity>
 
           {showTimePicker && (
-            <DateTimePicker
-              value={formData.date || new Date()}
-              mode="time"
-              display="spinner"
-              onChange={onTimeChange}
-              textColor={isDark ? '#E2E8F0' : '#1A202C'}
-              themeVariant={isDark ? 'dark' : 'light'}
-            />
+            <DateTimePicker value={formData.date || new Date()} mode="time" display="spinner" onChange={onTimeChange} textColor={isDark ? '#E2E8F0' : '#1A202C'} themeVariant={isDark ? 'dark' : 'light'} />
           )}
         </View>
 
@@ -675,10 +605,7 @@ const RemindersScreen: React.FC = () => {
           <Text style={[styles.label, { color: isDark ? '#E2E8F0' : '#4A5568' }]}>{typeText}</Text>
           <View style={styles.typeContainer}>
             <TouchableOpacity
-              style={[
-                styles.typeButton,
-                formData.type === 'medication' ? { backgroundColor: isDark ? '#2F855A' : '#38A169' } : { backgroundColor: isDark ? '#2D3748' : '#EDF2F7' },
-              ]}
+              style={[styles.typeButton, formData.type === 'medication' ? { backgroundColor: isDark ? '#2F855A' : '#38A169' } : { backgroundColor: isDark ? '#2D3748' : '#EDF2F7' }]}
               onPress={() => (isEditing ? setEditingReminder({ ...editingReminder!, type: 'medication' }) : setNewReminder({ ...newReminder, type: 'medication' }))}
             >
               <Ionicons name="medkit" size={18} color={formData.type === 'medication' ? '#FFFFFF' : isDark ? '#E2E8F0' : '#4A5568'} />
@@ -686,10 +613,7 @@ const RemindersScreen: React.FC = () => {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[
-                styles.typeButton,
-                formData.type === 'activity' ? { backgroundColor: isDark ? '#2F855A' : '#38A169' } : { backgroundColor: isDark ? '#2D3748' : '#EDF2F7' },
-              ]}
+              style={[styles.typeButton, formData.type === 'activity' ? { backgroundColor: isDark ? '#2F855A' : '#38A169' } : { backgroundColor: isDark ? '#2D3748' : '#EDF2F7' }]}
               onPress={() => (isEditing ? setEditingReminder({ ...editingReminder!, type: 'activity' }) : setNewReminder({ ...newReminder, type: 'activity' }))}
             >
               <Ionicons name="walk" size={18} color={formData.type === 'activity' ? '#FFFFFF' : isDark ? '#E2E8F0' : '#4A5568'} />
@@ -712,16 +636,15 @@ const RemindersScreen: React.FC = () => {
             <Text style={[styles.cancelButtonText, { color: isDark ? '#E2E8F0' : '#4A5568' }]}>{cancelText}</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity
-            style={[styles.saveButton, { backgroundColor: isDark ? '#2F855A' : '#38A169' }]}
-            onPress={isEditing ? updateReminder : addReminder}
-          >
+          <TouchableOpacity style={[styles.saveButton, { backgroundColor: isDark ? '#2F855A' : '#38A169' }]} onPress={isEditing ? updateReminder : addReminder}>
             <Text style={styles.saveButtonText}>{isEditing ? saveText : addReminderText}</Text>
           </TouchableOpacity>
         </View>
       </View>
     );
   };
+
+  const handleBack = () => navigation.goBack();
 
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: isDark ? '#171923' : '#FFFBEF' }]}>
@@ -735,15 +658,9 @@ const RemindersScreen: React.FC = () => {
         <TouchableOpacity
           style={[styles.addButton, { backgroundColor: isDark ? '#2F855A' : '#38A169' }]}
           onPress={() => {
-            setNewReminder({
-              title: '',
-              time: '08:00 AM',
-              date: new Date(),
-              type: 'medication',
-              enabled: true,
-            });
+            setNewReminder({ title: '', time: '08:00 AM', date: new Date(), type: 'medication', enabled: true });
             setEditingReminder(null);
-            setIsFormVisible(true); // <-- show form even when title is empty
+            setIsFormVisible(true);
           }}
         >
           <Ionicons name="add" size={20} color="white" />
@@ -754,7 +671,7 @@ const RemindersScreen: React.FC = () => {
       <FlatList
         data={reminders}
         renderItem={renderReminder}
-        keyExtractor={(item) => item.id}
+        keyExtractor={item => item.id}
         contentContainerStyle={styles.reminderList}
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
@@ -764,219 +681,49 @@ const RemindersScreen: React.FC = () => {
         }
       />
 
-      {/* Form modal visible when adding or editing */}
       {(isFormVisible || editingReminder) && <View style={styles.modalOverlay}>{renderReminderForm()}</View>}
     </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-  },
-  backButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-  },
-  backButtonText: {
-    marginLeft: 8,
-    fontSize: 16,
-  },
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 24,
-    paddingHorizontal: 16,
-    paddingTop: 8,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#2F855A',
-  },
-  addButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 20,
-    justifyContent: 'center',
-  },
-  addButtonText: {
-    color: 'white',
-    marginLeft: 6,
-    fontWeight: '500',
-    fontSize: 14,
-  },
-  reminderList: {
-    padding: 16,
-    paddingBottom: 24,
-  },
-  reminderCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 12,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-  },
-  reminderLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    flex: 1,
-  },
-  reminderTextContainer: {
-    flex: 1,
-  },
-  reminderTimeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 4,
-  },
-  timeIcon: {
-    marginRight: 4,
-  },
-  reminderIconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
-  },
-  reminderTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 4,
-  },
-  reminderTime: {
-    fontSize: 14,
-    opacity: 0.8,
-  },
-  reminderActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  deleteButton: {
-    marginLeft: 12,
-    padding: 6,
-  },
-  emptyContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 40,
-  },
-  emptyText: {
-    marginTop: 16,
-    fontSize: 16,
-    textAlign: 'center',
-  },
-  // Modal styles
-  modalOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  formContainer: {
-    width: '100%',
-    borderRadius: 16,
-    padding: 24,
-    maxWidth: 400,
-    maxHeight: '90%',
-  },
-  formTitle: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    marginBottom: 24,
-    textAlign: 'center',
-  },
-  formGroup: {
-    marginBottom: 20,
-  },
-  label: {
-    fontSize: 14,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  input: {
-    borderRadius: 10,
-    padding: 12,
-    fontSize: 16,
-  },
-  textInput: {
-    fontSize: 16,
-    padding: 0,
-  },
-  timePickerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  timeText: {
-    marginLeft: 10,
-    fontSize: 16,
-  },
-  typeContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 8,
-  },
-  typeButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 12,
-    borderRadius: 10,
-    marginHorizontal: 4,
-  },
-  typeButtonText: {
-    marginLeft: 8,
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  formButtons: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 24,
-  },
-  cancelButton: {
-    flex: 1,
-    borderWidth: 1,
-    borderRadius: 10,
-    padding: 14,
-    alignItems: 'center',
-    marginRight: 12,
-  },
-  cancelButtonText: {
-    fontSize: 16,
-    fontWeight: '500',
-  },
-  saveButton: {
-    flex: 1,
-    borderRadius: 10,
-    padding: 14,
-    alignItems: 'center',
-  },
-  saveButtonText: {
-    color: 'white',
-    fontSize: 16,
-    fontWeight: '500',
-  },
+  container: { flex: 1 },
+  backButton: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1 },
+  backButtonText: { marginLeft: 8, fontSize: 16 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, paddingHorizontal: 16, paddingTop: 8 },
+  title: { fontSize: 28, fontWeight: 'bold', color: '#2F855A' },
+  addButton: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 16, borderRadius: 20, justifyContent: 'center' },
+  addButtonText: { color: 'white', marginLeft: 6, fontWeight: '500', fontSize: 14 },
+  reminderList: { padding: 16, paddingBottom: 24 },
+  reminderCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderRadius: 12, marginBottom: 12, elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 2 },
+  reminderLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  reminderTextContainer: { flex: 1 },
+  reminderTimeContainer: { flexDirection: 'row', alignItems: 'center', marginTop: 4 },
+  timeIcon: { marginRight: 4 },
+  reminderIconContainer: { width: 48, height: 48, borderRadius: 12, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  reminderTitle: { fontSize: 16, fontWeight: '600', marginBottom: 4 },
+  reminderTime: { fontSize: 14, opacity: 0.8 },
+  reminderActions: { flexDirection: 'row', alignItems: 'center' },
+  deleteButton: { marginLeft: 12, padding: 6 },
+  emptyContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 40 },
+  emptyText: { marginTop: 16, fontSize: 16, textAlign: 'center' },
+  modalOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  formContainer: { width: '100%', borderRadius: 16, padding: 24, maxWidth: 400, maxHeight: '90%' },
+  formTitle: { fontSize: 22, fontWeight: 'bold', marginBottom: 24, textAlign: 'center' },
+  formGroup: { marginBottom: 20 },
+  label: { fontSize: 14, fontWeight: '600', marginBottom: 8 },
+  input: { borderRadius: 10, padding: 12, fontSize: 16 },
+  textInput: { fontSize: 16, padding: 0 },
+  timePickerButton: { flexDirection: 'row', alignItems: 'center' },
+  timeText: { marginLeft: 10, fontSize: 16 },
+  typeContainer: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
+  typeButton: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: 12, borderRadius: 10, marginHorizontal: 4 },
+  typeButtonText: { marginLeft: 8, fontSize: 14, fontWeight: '500' },
+  formButtons: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 24 },
+  cancelButton: { flex: 1, borderWidth: 1, borderRadius: 10, padding: 14, alignItems: 'center', marginRight: 12 },
+  cancelButtonText: { fontSize: 16, fontWeight: '500' },
+  saveButton: { flex: 1, borderRadius: 10, padding: 14, alignItems: 'center' },
+  saveButtonText: { color: 'white', fontSize: 16, fontWeight: '500' },
 });
 
 export default RemindersScreen;
