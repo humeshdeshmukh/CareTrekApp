@@ -54,8 +54,8 @@ const STORAGE_KEYS = {
 };
 
 const DEFAULT_REGION: Region = {
-  latitude: 37.78825,
-  longitude: -122.4324,
+  latitude: 21.005066,
+  longitude: 79.047718,
   latitudeDelta: 0.0922,
   longitudeDelta: 0.0421,
 };
@@ -119,15 +119,35 @@ const MapScreen: React.FC = () => {
   // Request location permission for both Android and iOS
   const requestLocationPermission = async () => {
     try {
+      console.log('Requesting location permission...');
       const { status } = await Location.requestForegroundPermissionsAsync();
+      console.log('Location permission status:', status);
+      
       if (status === 'granted') {
         console.log('Location permission granted');
+        // Check if location is enabled
+        const enabled = await Location.hasServicesEnabledAsync();
+        if (!enabled) {
+          console.log('Location services are disabled');
+          Alert.alert(
+            'Location Services Disabled',
+            'Please enable location services on your device to use this feature.',
+            [
+              {
+                text: 'Open Settings',
+                onPress: () => Linking.openSettings()
+              },
+              { text: 'Cancel', style: 'cancel' }
+            ]
+          );
+          return false;
+        }
         return true;
       } else {
         console.log('Location permission denied');
         Alert.alert(
-          'Permission Denied',
-          'Location permission is needed to show your position on the map. You can enable it in app settings.',
+          'Permission Required',
+          'Location permission is needed to show your position on the map. Please enable it in your device settings.',
           [
             {
               text: 'Open Settings',
@@ -139,7 +159,8 @@ const MapScreen: React.FC = () => {
         return false;
       }
     } catch (err) {
-      console.warn('Error requesting location permission:', err);
+      console.error('Error requesting location permission:', err);
+      Alert.alert('Error', 'Failed to request location permission. Please try again.');
       return false;
     }
   };
@@ -149,14 +170,45 @@ const MapScreen: React.FC = () => {
     console.log('Getting current location...');
 
     try {
+      // First check if we have permission
+      const { status } = await Location.getForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        console.log('Location permission not granted, requesting...');
+        const hasPermission = await requestLocationPermission();
+        if (!hasPermission) return null;
+      }
+
+      // Check if location services are enabled
+      const enabled = await Location.hasServicesEnabledAsync();
+      if (!enabled) {
+        Alert.alert(
+          'Location Services Disabled',
+          'Please enable location services on your device to use this feature.',
+          [
+            {
+              text: 'Open Settings',
+              onPress: () => Linking.openSettings()
+            },
+            { text: 'Cancel', style: 'cancel' }
+          ]
+        );
+        return null;
+      }
+
+      console.log('Requesting current position...');
       const location = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.High,
         timeInterval: 5000,
         distanceInterval: 5,
+        mayShowUserSettingsDialog: true, // Show dialog to enable location if disabled
       });
 
       console.log('Got position:', location);
       const { latitude, longitude, accuracy } = location.coords;
+      
+      if (!latitude || !longitude) {
+        throw new Error('Invalid coordinates received');
+      }
 
       // Only update if we have valid coordinates
       if (latitude && longitude) {
